@@ -1,0 +1,67 @@
+/* 족보 선지 매칭 시스템 스타일 */
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+
+body {
+  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+}
+
+.tab-btn {
+  color: #64748b;
+  border-color: transparent;
+  transition: all 0.15s ease-in-out;
+}
+
+.tab-btn:hover {
+  color: #334155;
+  border-color: #cbd5e1;
+}
+
+.tab-btn.active-tab {
+  color: #4f46e5;
+  border-color: #4f46e5;
+}
+
+.filter-btn {
+  background-color: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+  transition: all 0.15s ease;
+}
+
+.filter-btn:hover {
+  background-color: #e2e8f0;
+  color: #334155;
+}
+
+.filter-btn.active-filter {
+  background-color: #4f46e5;
+  color: #ffffff;
+  border-color: #4f46e5;
+}
+
+/* 형광펜 하이라이트 스타일 */
+mark.match-mark {
+  background-color: #fef08a; /* amber-200 */
+  color: #78350f; /* amber-900 */
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 4px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* 스크롤바 커스텀 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
