@@ -25,44 +25,50 @@ function getUserHeaders() {
 
 async function checkUserAuth() {
   try {
-    // 1. Supabase 세션 확인
+    // 1. 로컬 캐시 사용자 확인 (새로고침 시 1ms 만에 즉시 로그인 복원)
+    const cachedUser = localStorage.getItem('knumed_current_user');
+    if (cachedUser) {
+      try {
+        const u = JSON.parse(cachedUser);
+        if (u && u.username) {
+          currentUser = u;
+          document.getElementById('userNameDisplay').textContent = `${currentUser.name} (${currentUser.username})`;
+          showLoginModal(false);
+          loadSubjects().catch(e => console.warn(e));
+          return;
+        }
+      } catch (e) {}
+    }
+
+    // 2. Supabase 세션 확인
     if (typeof supabaseGetCurrentUser === 'function') {
       const sbUser = await supabaseGetCurrentUser();
       if (sbUser) {
         currentUser = sbUser;
         document.getElementById('userNameDisplay').textContent = `${currentUser.name} (${currentUser.username})`;
         showLoginModal(false);
-        await loadSubjects();
+        loadSubjects().catch(e => console.warn(e));
         return;
       }
     }
   } catch (err) {
-    console.warn('Supabase auth check error:', err);
+    console.warn('Auth check warning:', err);
   }
 
-  // 로그인되지 않은 경우 모달 표시
   showLoginModal(true);
 }
 
 
-function fillApprovedUser(username, password) {
-  const uInput = document.getElementById('loginUsername');
-  const pInput = document.getElementById('loginPassword');
-  if (uInput && pInput) {
-    uInput.value = username;
-    pInput.value = password || '1234';
-    // 자동 로그인 트리거
-    const loginForm = document.getElementById('loginForm');
-    if (loginForm) {
-      loginForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
-    }
-  }
-}
-
 function showLoginModal(show) {
   const modal = document.getElementById('loginModal');
-  if (show) modal.classList.remove('hidden');
-  else modal.classList.add('hidden');
+  if (!modal) return;
+  if (show) {
+    modal.classList.remove('hidden');
+    modal.style.display = 'flex';
+  } else {
+    modal.classList.add('hidden');
+    modal.style.display = 'none';
+  }
 }
 
 function switchAuthTab(tab) {
@@ -94,25 +100,36 @@ function initAuthForms() {
     const errEl = document.getElementById('loginError');
     errEl.classList.add('hidden');
 
+    const usernameVal = uInput.value.trim();
+    const passwordVal = pInput.value;
+
     const submitBtn = loginForm.querySelector('button[type="submit"]');
     const originalText = submitBtn.innerHTML;
     submitBtn.disabled = true;
-    submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-xs"></i> <span>로그인 확인 중...</span>`;
+    submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-xs mr-1.5"></i><span>로그인 중...</span>`;
 
     try {
       if (typeof supabaseLogin === 'function') {
-        const res = await supabaseLogin(uInput.value.trim(), pInput.value);
-        if (res.success) {
+        const res = await supabaseLogin(usernameVal, passwordVal);
+        if (res.success && res.user) {
           currentUser = res.user;
+          localStorage.setItem('knumed_current_user', JSON.stringify(currentUser));
+          localStorage.setItem('user_token', currentUser.id);
+
           document.getElementById('userNameDisplay').textContent = `${currentUser.name} (${currentUser.username})`;
+          
+          // 로그인 모달 즉시 닫기
           showLoginModal(false);
-          await loadSubjects();
+
+          // 데이터 비동기 로드 (실패해도 로그인 상태는 유지)
+          loadSubjects().catch(e => console.warn('Subjects load non-fatal warning:', e));
           return;
         }
       }
-      throw new Error('인증 모듈이 올바르게 초기화되지 않았습니다.');
+      throw new Error('인증 처리 모듈을 초기화할 수 없습니다.');
     } catch (err) {
-      errEl.textContent = err.message || '로그인 실패';
+      console.error('Login error:', err);
+      errEl.textContent = err.message || '로그인에 실패했습니다. 아이디와 비밀번호를 확인해주세요.';
       errEl.classList.remove('hidden');
     } finally {
       submitBtn.disabled = false;
@@ -160,7 +177,9 @@ function initAuthForms() {
 async function userLogout() {
   if (confirm('로그아웃 하시겠습니까?')) {
     if (typeof supabaseLogout === 'function') {
-      await supabaseLogout();
+      localStorage.removeItem('knumed_current_user');
+  localStorage.removeItem('user_token');
+  await supabaseLogout();
     }
     localStorage.removeItem('user_token');
     userToken = '';
