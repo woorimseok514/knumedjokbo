@@ -1044,6 +1044,24 @@ async function startSolving(examId) {
       return;
     }
 
+    // 커스텀 정답표(localStorage) 우선 반영
+    const localKeys = localStorage.getItem(`custom_answer_keys_${exam.id}`);
+    if (localKeys) {
+      try {
+        const parsed = JSON.parse(localKeys);
+        exam.answer_keys = { ...(exam.answer_keys || {}), ...parsed };
+      } catch (e) {}
+    }
+    // 각 문항의 answer 속성도 answer_keys에 맞추어 동기화
+    if (exam.answer_keys && Array.isArray(exam.questions)) {
+      exam.questions.forEach((q, idx) => {
+        const qNum = String(q.q_number || (idx + 1));
+        if (exam.answer_keys[qNum]) {
+          q.answer = exam.answer_keys[qNum];
+        }
+      });
+    }
+
     currentExamForSolving = exam;
     currentQuestionIndex = 0;
     userAnswers = {};
@@ -1586,7 +1604,9 @@ function backToWorkbooksList() {
   loadWorkbooks();
 }
 
-// ------------------- 정답표(Answer Key) 관리 모달 (복수 정답 & 주관식 완벽 지원) -------------------
+// ------------------- 정답표(Answer Key) 관리 모달 (원클릭 & 주관식 완벽 지원) -------------------
+
+let currentExamForAnswerKey = null;
 
 async function openAnswerKeyModal(examId) {
   try {
@@ -1594,10 +1614,13 @@ async function openAnswerKeyModal(examId) {
     if (Array.isArray(exam)) {
       exam = exam.find(e => e.id === examId) || exam[0];
     }
-    if (!exam) return;
+    if (!exam) {
+      alert('족보 데이터를 불러올 수 없습니다.');
+      return;
+    }
     currentExamForAnswerKey = exam;
 
-    // 로컬 스토리지에 저장된 커스텀 정답표가 있다면 병합
+    // 로컬스토리지에 저장된 커스텀 정답표가 있다면 병합
     const localSavedKeys = localStorage.getItem(`custom_answer_keys_${examId}`);
     if (localSavedKeys) {
       try {
@@ -1605,88 +1628,119 @@ async function openAnswerKeyModal(examId) {
       } catch (e) {}
     }
 
-    document.getElementById('akModalTitle').textContent = `[${exam.title}] 정답표 설정`;
-    const container = document.getElementById('akQuestionsList');
-    const existingKeys = exam.answer_keys || {};
-
-    const standardChoices = ['①', '②', '③', '④', '⑤'];
-
-    container.innerHTML = (exam.questions || []).map((q, idx) => {
+    // 각 질문의 answer 속성도 백업 반영
+    if (!exam.answer_keys) exam.answer_keys = {};
+    (exam.questions || []).forEach((q, idx) => {
       const qNum = String(q.q_number || (idx + 1));
-      const currentKey = existingKeys[qNum] || '';
-      const isSubjective = !q.choices || q.choices.length === 0;
+      if (!exam.answer_keys[qNum] && q.answer) {
+        exam.answer_keys[qNum] = String(q.answer);
+      }
+    });
 
-      return `
-        <div class="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-          <div class="flex items-start justify-between gap-2">
-            <p class="text-xs font-bold text-slate-800 flex items-start gap-1.5 flex-1">
-              <span class="w-5 h-5 rounded-md bg-slate-800 text-white flex items-center justify-center text-[10px] shrink-0 mt-0.5">${qNum}</span>
-              <span class="leading-snug">${escapeHtml(cleanQuestionStem(q.stem || '문항 ' + qNum))}</span>
-            </p>
-            ${isSubjective 
-              ? '<span class="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">주관식/단답</span>' 
-              : '<span class="text-[10px] font-bold text-slate-500 bg-slate-200/70 px-2 py-0.5 rounded">객관식</span>'}
-          </div>
-          
-          <div class="flex flex-wrap items-center gap-2.5 pt-1">
-            <span class="text-xs text-slate-500 font-semibold">정답 설정:</span>
-            
-            ${!isSubjective ? `
-              <div class="flex gap-1">
-                ${standardChoices.map(opt => `
-                  <button type="button" onclick="quickSetAnswerKey('${qNum}', '${opt}')" 
-                          class="px-2 py-0.5 text-xs rounded-lg border transition ${currentKey === opt ? 'bg-indigo-600 text-white font-bold border-indigo-600' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'}">
-                    ${opt}
-                  </button>
-                `).join('')}
-              </div>
-            ` : ''}
+    document.getElementById('akModalTitle').textContent = `[${exam.title || '족보'}] 정답표 수정`;
 
-            <!-- 복수 정답 및 주관식 텍스트 직접 입력창 -->
-            <div class="flex-1 min-w-[200px]">
-              <input type="text" id="ak_input_${qNum}" value="${escapeHtml(currentKey)}" 
-                     oninput="updateAnswerKeyText('${qNum}', this.value)"
-                     placeholder="${isSubjective ? '주관식 정답 입력 (예: 단어, 서술)' : '복수 정답/직접 입력 (예: 3,4 또는 ③,④)'}" 
-                     class="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none bg-white font-medium">
-            </div>
-          </div>
-        </div>
-      `;
-    }).join('');
+    renderAnswerKeyQuestionsList();
 
-    document.getElementById('answerKeyModal').classList.remove('hidden');
+    const modal = document.getElementById('answerKeyModal');
+    if (modal) modal.classList.remove('hidden');
   } catch (err) {
+    console.error('Answer key load error:', err);
     alert('정답표를 불러오지 못했습니다.');
   }
+}
+
+function renderAnswerKeyQuestionsList() {
+  if (!currentExamForAnswerKey) return;
+  const container = document.getElementById('akQuestionsList');
+  if (!container) return;
+
+  const existingKeys = currentExamForAnswerKey.answer_keys || {};
+  const standardChoices = ['①', '②', '③', '④', '⑤'];
+
+  container.innerHTML = (currentExamForAnswerKey.questions || []).map((q, idx) => {
+    const qNum = String(q.q_number || (idx + 1));
+    const currentKey = existingKeys[qNum] || '';
+    const isSubjective = !q.choices || q.choices.length === 0;
+
+    return `
+      <div class="p-4 bg-slate-50 hover:bg-slate-100/80 transition rounded-2xl border border-slate-200/90 space-y-3">
+        <div class="flex items-start justify-between gap-3">
+          <p class="text-xs font-bold text-slate-800 flex items-start gap-2 flex-1 leading-snug">
+            <span class="w-6 h-6 rounded-lg bg-indigo-600 text-white font-bold flex items-center justify-center text-xs shrink-0 mt-0.5">
+              ${qNum}
+            </span>
+            <span class="leading-relaxed pt-0.5">${escapeHtml(cleanQuestionStem(q.stem || '문항 ' + qNum))}</span>
+          </p>
+          <span class="text-[11px] font-bold px-2.5 py-1 rounded-lg shrink-0 ${currentKey ? 'bg-indigo-100 text-indigo-700 border border-indigo-200' : 'bg-slate-200 text-slate-600'}">
+            ${currentKey ? '정답 ' + escapeHtml(currentKey) : '미지정'}
+          </span>
+        </div>
+        
+        <div class="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-slate-200/60">
+          ${!isSubjective ? `
+            <div class="flex items-center gap-1.5">
+              <span class="text-xs text-slate-500 font-semibold mr-1">객관식:</span>
+              <div class="flex gap-1">
+                ${standardChoices.map(opt => {
+                  const isSelected = String(currentKey) === String(opt);
+                  const activeClass = isSelected
+                    ? 'bg-indigo-600 text-white font-bold border-indigo-600 shadow-sm'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-200/70';
+                  return `
+                    <button type="button" onclick="quickSetAnswerKey('${qNum}', '${opt}')" 
+                            class="w-7 h-7 flex items-center justify-center text-xs rounded-lg border transition ${activeClass}">
+                      ${opt}
+                    </button>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          ` : '<span class="text-xs text-indigo-600 font-semibold"><i class="fa-solid fa-pen"></i> 주관식/서술형 문항</span>'}
+
+          <!-- 직접 입력창 -->
+          <div class="flex items-center gap-2 flex-1 max-w-xs justify-end">
+            <span class="text-xs text-slate-500 font-semibold shrink-0">직접입력:</span>
+            <input type="text" id="ak_input_${qNum}" value="${escapeHtml(currentKey)}" 
+                   oninput="updateAnswerKeyText('${qNum}', this.value)"
+                   placeholder="${isSubjective ? '주관식 정답 입력' : '예: ③ 또는 3,4'}" 
+                   class="w-36 px-2.5 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none bg-white font-bold text-center">
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 function quickSetAnswerKey(qNum, opt) {
   if (!currentExamForAnswerKey) return;
   if (!currentExamForAnswerKey.answer_keys) currentExamForAnswerKey.answer_keys = {};
   
-  const input = document.getElementById(`ak_input_${qNum}`);
   let cur = (currentExamForAnswerKey.answer_keys[qNum] || '').trim();
   
   if (cur === opt) {
-    cur = '';
+    delete currentExamForAnswerKey.answer_keys[qNum];
   } else {
-    cur = opt;
+    currentExamForAnswerKey.answer_keys[qNum] = opt;
   }
   
-  currentExamForAnswerKey.answer_keys[qNum] = cur;
-  if (input) input.value = cur;
-  
-  openAnswerKeyModal(currentExamForAnswerKey.id);
+  // UI만 즉시 갱신 (다시 fetch하지 않음!)
+  renderAnswerKeyQuestionsList();
 }
 
 function updateAnswerKeyText(qNum, val) {
   if (!currentExamForAnswerKey) return;
   if (!currentExamForAnswerKey.answer_keys) currentExamForAnswerKey.answer_keys = {};
-  currentExamForAnswerKey.answer_keys[qNum] = val.trim();
+  const trimmed = val.trim();
+  if (trimmed) {
+    currentExamForAnswerKey.answer_keys[qNum] = trimmed;
+  } else {
+    delete currentExamForAnswerKey.answer_keys[qNum];
+  }
 }
 
 function closeAnswerKeyModal() {
-  document.getElementById('answerKeyModal').classList.add('hidden');
+  const modal = document.getElementById('answerKeyModal');
+  if (modal) modal.classList.add('hidden');
 }
 
 async function saveAnswerKeyForm() {
@@ -1694,21 +1748,75 @@ async function saveAnswerKeyForm() {
   const examId = currentExamForAnswerKey.id;
   const keys = currentExamForAnswerKey.answer_keys || {};
 
-  // 로컬 캐시 즉시 업데이트
+  // 1. 각 문항의 answer 속성도 갱신
+  if (Array.isArray(currentExamForAnswerKey.questions)) {
+    currentExamForAnswerKey.questions.forEach((q, idx) => {
+      const qNum = String(q.q_number || (idx + 1));
+      if (keys[qNum]) {
+        q.answer = keys[qNum];
+      }
+    });
+  }
+
+  // 2. 브라우저 localStorage에 영구 보존
   localStorage.setItem(`custom_answer_keys_${examId}`, JSON.stringify(keys));
 
-  // 서버 API가 있을 경우 동기화
-  try {
-    await fetch(`/api/workbooks/${examId}/answers`, {
-      method: 'POST',
-      headers: { ...getUserHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ answer_keys: keys })
-    });
-  } catch (err) {}
+  // 3. 현재 풀이 중인 시험이 있다면 즉시 동기화
+  if (currentExamForSolving && currentExamForSolving.id === examId) {
+    currentExamForSolving.answer_keys = { ...keys };
+    if (Array.isArray(currentExamForSolving.questions)) {
+      currentExamForSolving.questions.forEach((q, idx) => {
+        const qNum = String(q.q_number || (idx + 1));
+        if (keys[qNum]) q.answer = keys[qNum];
+      });
+    }
+  }
 
-  alert('정답표가 성공적으로 저장되었습니다!');
+  // 4. Supabase DB 연동 시 동기화
+  if (typeof supabaseClient !== 'undefined' && supabaseClient) {
+    try {
+      await supabaseClient.from('exam_answer_keys').upsert({
+        exam_id: examId,
+        keys: keys,
+        updated_at: new Date().toISOString()
+      });
+    } catch (e) {
+      console.warn('Supabase sync skipped:', e);
+    }
+  }
+
+  alert(`[${currentExamForAnswerKey.title || '족보'}] 정답표가 저장되었습니다!\n\n이제 문제 풀이 및 채점 시 수정된 정답이 바로 적용됩니다.`);
   closeAnswerKeyModal();
-  loadWorkbooks();
+  if (typeof loadWorkbooks === 'function') loadWorkbooks();
+}
+
+async function downloadAnswerKeyExamsJson() {
+  if (!currentExamForAnswerKey) return;
+  try {
+    let allExams = await smartFetchJson('/api/exams', './data/exams.json');
+    if (!Array.isArray(allExams)) allExams = [currentExamForAnswerKey];
+    
+    // 현재 수정한 exam 교체
+    const idx = allExams.findIndex(e => e.id === currentExamForAnswerKey.id);
+    if (idx !== -1) {
+      allExams[idx] = currentExamForAnswerKey;
+    } else {
+      allExams.push(currentExamForAnswerKey);
+    }
+
+    const jsonStr = JSON.stringify(allExams, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'exams.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('다운로드 중 오류가 발생했습니다.');
+  }
 }
 
 // ------------------- 시스템 관리자 콘솔 모달 (내장형) -------------------
