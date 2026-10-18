@@ -690,7 +690,7 @@ function renderQuestionsList() {
               ${qNum}
             </span>
             <div class="flex-1">
-              <h4 class="font-bold text-slate-900 text-sm leading-snug">${escapeHtml(stem)}</h4>
+              <h4 class="font-bold text-slate-900 text-sm leading-snug">${escapeHtml(cleanQuestionStem(stem))}</h4>
             </div>
           </div>
         </div>
@@ -1083,6 +1083,16 @@ function stopSolverTimer() {
   }
 }
 
+function cleanQuestionStem(stem) {
+  if (!stem) return '';
+  let s = String(stem);
+  s = s.replace(/\s*1\s*,\s*4\s*1\)\s*2\)\s*3\)\s*4\)\s*5\)\s*$/, '');
+  s = s.replace(/\(\s*[1-5](?:\s*,\s*[1-5])*\s*\)([\.\s]*)$/, '( )$1');
+  s = s.replace(/([\?\.\)])\s*([1-5](?:\s*,\s*[1-5])*)\s*$/, '$1');
+  s = s.replace(/\s+([1-5](?:\s*,\s*[1-5])*)\s*$/, '');
+  return s.trim();
+}
+
 function renderCurrentQuestion() {
   if (!currentExamForSolving) return;
   const qList = currentExamForSolving.questions || [];
@@ -1095,7 +1105,7 @@ function renderCurrentQuestion() {
   // 헤더 및 프로그레스
   document.getElementById('solverProgressText').textContent = `문항 ${currentQuestionIndex + 1} / ${total}`;
   document.getElementById('currentQNumBadge').textContent = `Q. ${qNum}`;
-  document.getElementById('currentQStem').textContent = q.stem || '';
+  document.getElementById('currentQStem').textContent = cleanQuestionStem(q.stem || '');
   document.getElementById('qIndicator').textContent = `${currentQuestionIndex + 1} / ${total}`;
 
   // 이전/다음 버튼 비활성화 상태
@@ -1471,7 +1481,7 @@ function renderReviewResult(data) {
             <span class="w-8 h-8 rounded-xl bg-slate-900 text-white font-bold text-xs flex items-center justify-center shrink-0">
               ${r.q_number}
             </span>
-            <h4 class="font-bold text-slate-900 text-base leading-snug">${escapeHtml(r.stem)}</h4>
+            <h4 class="font-bold text-slate-900 text-base leading-snug">${escapeHtml(cleanQuestionStem(r.stem))}</h4>
           </div>
           <div>${statusBadge}</div>
         </div>
@@ -1567,7 +1577,7 @@ async function openAnswerKeyModal(examId) {
           <div class="flex items-start justify-between gap-2">
             <p class="text-xs font-bold text-slate-800 flex items-start gap-1.5 flex-1">
               <span class="w-5 h-5 rounded-md bg-slate-800 text-white flex items-center justify-center text-[10px] shrink-0 mt-0.5">${qNum}</span>
-              <span class="leading-snug">${escapeHtml(q.stem || '문항 ' + qNum)}</span>
+              <span class="leading-snug">${escapeHtml(cleanQuestionStem(q.stem || '문항 ' + qNum))}</span>
             </p>
             ${isSubjective 
               ? '<span class="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">주관식/단답</span>' 
