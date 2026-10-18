@@ -1476,6 +1476,96 @@ function cleanQuestionStem(stem) {
 }
 
 
+
+// ------------------- 복수 정답 및 선지 다중 선택 공통 유틸리티 -------------------
+
+const CIRCLE_SYMBOLS_LIST = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+
+const CIRCLE_TO_NUM_MAP = {
+  '①': '1', '②': '2', '③': '3', '④': '4', '⑤': '5',
+  '⑥': '6', '⑦': '7', '⑧': '8', '⑨': '9', '⑩': '10',
+  '⑴': '1', '⑵': '2', '⑶': '3', '⑷': '4', '⑸': '5'
+};
+
+const NUM_TO_CIRCLE_MAP = {
+  '1': '①', '2': '②', '3': '③', '4': '④', '5': '⑤',
+  '6': '⑥', '7': '⑦', '⑧': '⑧', '⑨': '⑨', '10': '⑩'
+};
+
+function normalizeToCircle(token) {
+  if (!token) return '';
+  const t = String(token).trim();
+  if (CIRCLE_TO_NUM_MAP[t]) return t;
+  if (NUM_TO_CIRCLE_MAP[t]) return NUM_TO_CIRCLE_MAP[t];
+  const m = t.match(/\d+/);
+  if (m && NUM_TO_CIRCLE_MAP[m[0]]) return NUM_TO_CIRCLE_MAP[m[0]];
+  return t;
+}
+
+function parseChoiceTokens(str) {
+  if (!str) return [];
+  const s = String(str).trim();
+  if (!s) return [];
+  const rawParts = s.split(/[,/·\s]+/).map(p => p.trim()).filter(Boolean);
+  const result = [];
+  rawParts.forEach(p => {
+    const circles = p.match(/[①-⑩]|\(\d+\)|\d+/g);
+    if (circles && circles.length > 0) {
+      circles.forEach(c => {
+        const norm = normalizeToCircle(c);
+        if (norm && !result.includes(norm)) result.push(norm);
+      });
+    } else {
+      const norm = normalizeToCircle(p);
+      if (norm && !result.includes(norm)) result.push(norm);
+    }
+  });
+  return result;
+}
+
+function sortChoiceTokens(tokens) {
+  if (!Array.isArray(tokens)) return [];
+  return tokens.slice().sort((a, b) => {
+    const numA = parseInt(CIRCLE_TO_NUM_MAP[a] || (a.match(/\d+/) ? a.match(/\d+/)[0] : '99'), 10);
+    const numB = parseInt(CIRCLE_TO_NUM_MAP[b] || (b.match(/\d+/) ? b.match(/\d+/)[0] : '99'), 10);
+    return numA - numB;
+  });
+}
+
+function isMultiChoiceQuestion(q, exam) {
+  if (!q) return false;
+  const qNum = String(q.q_number || '');
+  const keys = (exam && exam.answer_keys) ? exam.answer_keys : {};
+  const key = keys[qNum] || q.answer || '';
+  if (parseChoiceTokens(key).length > 1) return true;
+  const stem = q.stem || '';
+  if (/(?:2|3|4|두|세|네)\s*개|모두\s*(?:고르|선택)|복수\s*(?:정답|선택)|정답\s*(?:2|두)/i.test(stem)) return true;
+  return false;
+}
+
+let questionMultiModeOverrides = {};
+
+function isQuestionMultiMode(q, exam) {
+  if (!q) return false;
+  const qNum = String(q.q_number || '');
+  if (questionMultiModeOverrides[qNum] !== undefined) {
+    return questionMultiModeOverrides[qNum];
+  }
+  if (isMultiChoiceQuestion(q, exam)) return true;
+  const cur = userAnswers[qNum] || '';
+  if (parseChoiceTokens(cur).length > 1) return true;
+  return false;
+}
+
+function toggleQuestionMultiMode(qNum) {
+  if (!currentExamForSolving) return;
+  const qList = currentExamForSolving.questions || [];
+  const q = qList[currentQuestionIndex];
+  const curMode = isQuestionMultiMode(q, currentExamForSolving);
+  questionMultiModeOverrides[String(qNum)] = !curMode;
+  renderCurrentQuestion();
+}
+
 async function startSolving(examId) {
   try {
     let exam = await smartFetchJson(`/api/exams/${examId}`, './data/exams.json');
@@ -1491,6 +1581,7 @@ async function startSolving(examId) {
     currentExamForSolving = exam;
     currentQuestionIndex = 0;
     userAnswers = {};
+    questionMultiModeOverrides = {};
     solverSeconds = 0;
     solverHintVisible = false;
 
@@ -1545,6 +1636,7 @@ function renderCurrentQuestion() {
   if (!q) return;
 
   const qNum = q.q_number || (currentQuestionIndex + 1);
+  const isMulti = isQuestionMultiMode(q, currentExamForSolving);
 
   // 헤더 및 프로그레스
   document.getElementById('solverProgressText').textContent = `문항 ${currentQuestionIndex + 1} / ${total}`;
@@ -1559,28 +1651,57 @@ function renderCurrentQuestion() {
   // 선지 및 주관식 렌더링
   const choicesBox = document.getElementById('currentChoicesContainer');
   const currentAnswer = userAnswers[String(qNum)] || '';
+  const selectedTokens = parseChoiceTokens(currentAnswer);
 
   if (q.choices && q.choices.length > 0) {
-    choicesBox.innerHTML = q.choices.map((c, cIdx) => {
-      const label = c.label || `(${cIdx + 1})`;
-      const isSelected = currentAnswer === label;
+    const choicesHtml = q.choices.map((c, cIdx) => {
+      const label = c.label || CIRCLE_SYMBOLS_LIST[cIdx] || `(${cIdx + 1})`;
+      const normLabel = normalizeToCircle(label);
+      const isSelected = selectedTokens.includes(normLabel) || selectedTokens.includes(String(cIdx + 1));
       const activeClass = isSelected 
-        ? 'border-indigo-600 bg-indigo-50/70 shadow-sm ring-2 ring-indigo-500/20' 
+        ? 'border-indigo-600 bg-indigo-50/80 shadow-sm ring-2 ring-indigo-500/30' 
         : 'border-slate-200 bg-white hover:bg-slate-50/80';
       const badgeClass = isSelected
-        ? 'bg-indigo-600 text-white font-bold'
+        ? 'bg-indigo-600 text-white font-bold ring-2 ring-indigo-300'
         : 'bg-slate-100 text-slate-700 font-semibold group-hover:bg-indigo-100 group-hover:text-indigo-700';
 
       return `
         <div onclick="selectAnswer('${escapeHtml(label)}')" 
              class="group flex items-start gap-3.5 p-4 rounded-xl border-2 transition cursor-pointer ${activeClass}">
           <span class="w-7 h-7 rounded-full flex items-center justify-center text-xs shrink-0 transition ${badgeClass}">
-            ${escapeHtml(label)}
+            ${isSelected ? '<i class="fa-solid fa-check text-[11px] mr-0.5"></i>' : ''}${escapeHtml(label)}
           </span>
-          <span class="text-sm font-semibold text-slate-900 leading-snug pt-0.5">${escapeHtml(c.text)}</span>
+          <span class="text-sm font-semibold text-slate-900 leading-snug pt-0.5 flex-1">${escapeHtml(c.text)}</span>
+          ${isSelected ? '<span class="text-xs text-indigo-600 font-bold shrink-0 self-center">선택됨</span>' : ''}
         </div>
       `;
     }).join('');
+
+    const modeNoticeHtml = isMulti ? `
+      <div class="flex items-center justify-between p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 mb-2">
+        <div class="flex items-center gap-2">
+          <span class="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-indigo-600 text-white text-xs font-bold">
+            <i class="fa-solid fa-check-double text-[10px]"></i>
+          </span>
+          <div>
+            <p class="text-xs font-bold text-indigo-950">복수 정답 문항 (2개 이상 선택 가능)</p>
+            <p class="text-[11px] text-indigo-700">원하는 답안 선지들을 모두 클릭하세요. (선택된 선지를 다시 누르면 해제됩니다)</p>
+          </div>
+        </div>
+        <button type="button" onclick="toggleQuestionMultiMode('${qNum}')" class="text-[11px] text-slate-500 hover:text-indigo-600 font-semibold px-2 py-1 bg-white rounded border border-slate-200 hover:border-indigo-300 transition">
+          단일 선택으로 전환
+        </button>
+      </div>
+    ` : `
+      <div class="flex justify-end mb-1">
+        <button type="button" onclick="toggleQuestionMultiMode('${qNum}')" class="text-[11px] text-slate-500 hover:text-indigo-600 font-medium flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 hover:border-indigo-300 bg-white transition shadow-2xs">
+          <i class="fa-solid fa-square-check text-indigo-500 text-[10px]"></i>
+          <span>답 2개 이상 선택 모드로 전환</span>
+        </button>
+      </div>
+    `;
+
+    choicesBox.innerHTML = modeNoticeHtml + choicesHtml;
   } else {
     // 단답형 / 서술형 주관식 입력 UI
     choicesBox.innerHTML = `
@@ -1618,9 +1739,33 @@ function selectAnswer(label) {
   const qList = currentExamForSolving.questions || [];
   const q = qList[currentQuestionIndex];
   const qNum = String(q.q_number || (currentQuestionIndex + 1));
+  const isMulti = isQuestionMultiMode(q, currentExamForSolving);
+  const normLabel = normalizeToCircle(label);
 
-  // 토글 선택 (이미 선택된 걸 누르면 유지)
-  userAnswers[qNum] = label;
+  let cur = (userAnswers[qNum] || '').trim();
+  let tokens = parseChoiceTokens(cur);
+
+  if (isMulti) {
+    // 복수 정답 선택 (토글 추가/제거)
+    if (tokens.includes(normLabel)) {
+      tokens = tokens.filter(t => t !== normLabel);
+    } else {
+      tokens.push(normLabel);
+    }
+    tokens = sortChoiceTokens(tokens);
+    if (tokens.length > 0) {
+      userAnswers[qNum] = tokens.join(', ');
+    } else {
+      delete userAnswers[qNum];
+    }
+  } else {
+    // 단일 선택 (동일 선지 클릭 시 해제, 다른 선지 클릭 시 교체)
+    if (tokens.includes(normLabel) && tokens.length === 1) {
+      delete userAnswers[qNum];
+    } else {
+      userAnswers[qNum] = normLabel;
+    }
+  }
 
   renderCurrentQuestion();
   renderOMRGrid();
@@ -1644,7 +1789,7 @@ function renderOMRGrid() {
       <div onclick="jumpToQuestion(${idx})" 
            class="flex items-center justify-between p-2 rounded-xl border border-slate-200 hover:border-indigo-400 cursor-pointer transition ${currentIndicator}">
         <span class="text-xs font-bold text-slate-700 ml-1">${idx + 1}번</span>
-        <span class="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${ans ? 'bg-indigo-600 text-white shadow-xs' : 'bg-slate-200 text-slate-400'}">
+        <span class="min-w-[28px] h-6 px-1.5 rounded-full flex items-center justify-center text-xs font-bold ${ans ? 'bg-indigo-600 text-white shadow-xs' : 'bg-slate-200 text-slate-400'}">
           ${ans || '-'}
         </span>
       </div>
@@ -1728,22 +1873,27 @@ function evaluateQuestionAnswer(userAns, correctKey) {
     return { hasKey: true, isCorrect: false };
   }
 
-  // 1. 단순 텍스트 일치 (공백/대소문자 무시 - 단답형 및 원문자 일치)
+  // 1. 단순 텍스트 일치
   if (uTrim.toLowerCase() === cTrim.toLowerCase()) {
     return { hasKey: true, isCorrect: true };
   }
 
-  // 2. 복수 정답 및 번호 정규화 비교 (예: "3,4", "1, 4", "③, ④")
-  const uTokens = normalizeTokens(uTrim);
-  const cTokens = normalizeTokens(cTrim);
-
-  // 복수 정답 중 하나를 선택한 경우도 정답 처리
-  if (uTokens.length === 1 && cTokens.includes(uTokens[0])) {
+  // 2. 전원 정답 / 모두 정답 특별 처리
+  if (cTrim.includes('모두 정답') || cTrim.includes('전원 정답') || cTrim.includes('정답 없음')) {
     return { hasKey: true, isCorrect: true };
   }
 
-  // 복수 정답 전체를 다 맞춘 경우
-  if (uTokens.length > 1 && uTokens.slice().sort().join(',') === cTokens.slice().sort().join(',')) {
+  // 3. 복수 정답 번호 정규화 토큰 비교 (예: "3,4", "1, 3", "①, ③")
+  const uTokens = parseChoiceTokens(uTrim).map(t => CIRCLE_TO_NUM_MAP[t] || t.toLowerCase()).sort();
+  const cTokens = parseChoiceTokens(cTrim).map(t => CIRCLE_TO_NUM_MAP[t] || t.toLowerCase()).sort();
+
+  // 복수 정답 전체가 모두 일치하는 경우
+  if (uTokens.length === cTokens.length && uTokens.every((val, index) => val === cTokens[index])) {
+    return { hasKey: true, isCorrect: true };
+  }
+
+  // 문제 출제자가 복수 정답 중 하나만 골라도 인정('또는' 포함)하도록 한 경우
+  if (cTrim.includes('또는') && uTokens.some(ut => cTokens.includes(ut))) {
     return { hasKey: true, isCorrect: true };
   }
 
@@ -2050,7 +2200,8 @@ function renderAnswerKeyQuestionsList() {
       for (let cIdx = 0; cIdx < choicesCount; cIdx++) {
         const symbol = circleSymbols[cIdx] || `(${cIdx + 1})`;
         const digit = String(cIdx + 1);
-        const isSelected = String(currentKey) === symbol || String(currentKey) === digit;
+        const currentTokens = parseChoiceTokens(currentKey);
+        const isSelected = currentTokens.includes(symbol) || currentTokens.includes(digit);
         const activeClass = isSelected
           ? 'bg-indigo-600 text-white font-bold border-indigo-600 shadow-sm ring-1 ring-indigo-400'
           : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-200/70';
@@ -2108,11 +2259,21 @@ function quickSetAnswerKey(qNum, opt) {
   if (!currentExamForAnswerKey) return;
   if (!currentExamForAnswerKey.answer_keys) currentExamForAnswerKey.answer_keys = {};
   
+  const normOpt = normalizeToCircle(opt);
   let cur = (currentExamForAnswerKey.answer_keys[qNum] || '').trim();
-  if (cur === opt) {
-    delete currentExamForAnswerKey.answer_keys[qNum];
+  let tokens = parseChoiceTokens(cur);
+
+  if (tokens.includes(normOpt)) {
+    tokens = tokens.filter(t => t !== normOpt);
   } else {
-    currentExamForAnswerKey.answer_keys[qNum] = opt;
+    tokens.push(normOpt);
+  }
+
+  tokens = sortChoiceTokens(tokens);
+  if (tokens.length > 0) {
+    currentExamForAnswerKey.answer_keys[qNum] = tokens.join(', ');
+  } else {
+    delete currentExamForAnswerKey.answer_keys[qNum];
   }
   renderAnswerKeyQuestionsList();
 }
