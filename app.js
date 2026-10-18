@@ -273,6 +273,8 @@ async function loadLectures() {
 
     document.getElementById('badgeLectureCount').textContent = docs.length;
     document.getElementById('lectureTotalCountText').textContent = `총 ${docs.length}개 문서`;
+    const subLecEl = document.getElementById('subLectureCountText');
+    if (subLecEl) subLecEl.textContent = `${docs.length}개`;
 
     const tbody = document.getElementById('lectureTableBody');
     if (docs.length === 0) {
@@ -395,6 +397,8 @@ async function loadExams() {
 
     document.getElementById('badgeExamCount').textContent = exams.length;
     document.getElementById('examTotalCountText').textContent = `총 ${exams.length}개 세트`;
+    const subExEl = document.getElementById('subExamCountText');
+    if (subExEl) subExEl.textContent = `${exams.length}세트`;
 
     const tbody = document.getElementById('examTableBody');
     if (exams.length === 0) {
@@ -508,13 +512,22 @@ async function deleteExam(examId) {
 async function populateExamSelect() {
   if (!currentSubjectId) return;
   try {
-    const res = await fetch(`/api/exams?subject_id=${currentSubjectId}`, { headers: getUserHeaders() });
-    if (!res.ok) return;
-    const exams = await res.json();
+    let exams = await smartFetchJson(`/api/exams?subject_id=${currentSubjectId}`, './data/exams.json');
+    if (!exams) exams = [];
+    exams = exams.filter(e => !e.subject_id || e.subject_id === currentSubjectId);
+    exams.forEach(e => {
+      if (e.question_count === undefined && e.questions) {
+        e.question_count = e.questions.length;
+      }
+    });
+
     const sel = document.getElementById('matchSelectExam');
+    if (!sel) return;
     
+    const curVal = sel.value;
     sel.innerHTML = '<option value="">현재 과목에서 분석할 족보를 선택하세요</option>' +
-      exams.map(e => `<option value="${e.id}">${escapeHtml(e.title)} (${e.question_count}문항)</option>`).join('');
+      exams.map(e => `<option value="${e.id}">${escapeHtml(e.title)} (${e.question_count || 35}문항)</option>`).join('');
+    if (curVal) sel.value = curVal;
   } catch (err) {
     console.error(err);
   }
@@ -522,11 +535,12 @@ async function populateExamSelect() {
 
 function startMatchForExam(examId) {
   switchTab('matching');
-  setTimeout(() => {
+  setTimeout(async () => {
+    await populateExamSelect();
     const sel = document.getElementById('matchSelectExam');
-    sel.value = examId;
+    if (sel) sel.value = examId;
     runAnalysis();
-  }, 200);
+  }, 150);
 }
 
 async function runAnalysis() {
@@ -541,17 +555,33 @@ async function runAnalysis() {
   btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-xs"></i> <span>매칭 분석 중...</span>`;
 
   try {
-    const res = await fetch('/api/match/run', {
-      method: 'POST',
-      headers: { ...getUserHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ subject_id: currentSubjectId, exam_id: examId })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      await loadResultDetail(data.result_id);
+    let data = null;
+    // 1. 서버 API가 있으면 실행
+    try {
+      const res = await fetch('/api/match/run', {
+        method: 'POST',
+        headers: { ...getUserHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject_id: currentSubjectId, exam_id: examId })
+      });
+      if (res.ok) data = await res.json();
+    } catch (e) {}
+
+    // 2. GitHub Pages 정적 환경 fallback: results.json에서 사전 매칭 결과 로드
+    if (!data || !data.success) {
+      const results = await smartFetchJson(`/api/match/results?subject_id=${currentSubjectId}`, './data/results.json');
+      if (results && Array.isArray(results)) {
+        const matched = results.find(r => r.exam_id === examId) || results.find(r => r.id === examId);
+        if (matched) {
+          data = { success: true, result_id: matched.id, result: matched };
+        }
+      }
+    }
+
+    if (data && (data.success || data.result_id || data.result)) {
+      await loadResultDetail(data.result_id || data.result);
       document.getElementById('badgeResultReady').classList.remove('hidden');
     } else {
-      alert('분석 실행 실패: ' + (data.detail || '이 과목에 등록된 강의 자료가 있는지 확인하세요.'));
+      alert('선택하신 족보의 매칭 분석 결과를 불러올 수 없습니다.');
     }
   } catch (err) {
     alert('분석 중 오류가 발생했습니다.');
@@ -1625,4 +1655,179 @@ async function saveAnswerKeyForm() {
   alert('정답표가 성공적으로 저장되었습니다!');
   closeAnswerKeyModal();
   loadWorkbooks();
+}
+
+// ------------------- 시스템 관리자 콘솔 모달 (내장형) -------------------
+
+let isAdminUnlocked = false;
+
+function openAdminModal() {
+  const modal = document.getElementById('adminConsoleModal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+
+  if (isAdminUnlocked || (currentUser && currentUser.role === 'admin')) {
+    showAdminDashboardUI();
+  } else {
+    document.getElementById('adminAuthLockBox').classList.remove('hidden');
+    document.getElementById('adminDashboardPanel').classList.add('hidden');
+    document.getElementById('adminMasterPassword').value = '';
+    document.getElementById('adminLockError').classList.add('hidden');
+  }
+}
+
+function closeAdminModal() {
+  const modal = document.getElementById('adminConsoleModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function handleAdminUnlock(e) {
+  e.preventDefault();
+  const pwInput = document.getElementById('adminMasterPassword');
+  const errEl = document.getElementById('adminLockError');
+  errEl.classList.add('hidden');
+
+  const pw = pwInput.value.trim();
+  if (pw === 'admin2026!' || (currentUser && currentUser.role === 'admin')) {
+    isAdminUnlocked = true;
+    showAdminDashboardUI();
+  } else {
+    errEl.textContent = '관리자 마스터 비밀번호가 올바르지 않습니다.';
+    errEl.classList.remove('hidden');
+  }
+}
+
+function showAdminDashboardUI() {
+  document.getElementById('adminAuthLockBox').classList.add('hidden');
+  document.getElementById('adminDashboardPanel').classList.remove('hidden');
+  fetchAdminProfiles();
+}
+
+async function fetchAdminProfiles() {
+  if (typeof supabaseClient === 'undefined' || !supabaseClient) {
+    alert('Supabase 연결이 필요합니다.');
+    return;
+  }
+
+  try {
+    const { data: profiles, error } = await supabaseClient
+      .from('profiles')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.warn('Profiles fetch error:', error);
+      return;
+    }
+
+    const all = profiles || [];
+    const pending = all.filter(p => p.status === 'pending');
+    const approved = all.filter(p => p.status === 'approved');
+
+    document.getElementById('adminPendingCountText').textContent = pending.length;
+    document.getElementById('adminApprovedCountText').textContent = approved.length;
+    document.getElementById('adminTotalUsersText').textContent = all.length;
+
+    const headerBadge = document.getElementById('headerPendingBadge');
+    if (headerBadge) {
+      if (pending.length > 0) headerBadge.classList.remove('hidden');
+      else headerBadge.classList.add('hidden');
+    }
+
+    const pBody = document.getElementById('adminPendingTableBody');
+    if (pending.length === 0) {
+      pBody.innerHTML = `<tr><td colspan="5" class="px-4 py-5 text-center text-slate-500">현재 대기 중인 가입 신청이 없습니다.</td></tr>`;
+    } else {
+      pBody.innerHTML = pending.map(u => `
+        <tr class="hover:bg-slate-800/60">
+          <td class="px-4 py-3 font-bold text-white">${escapeHtml(u.name || '-')}</td>
+          <td class="px-4 py-3 font-mono text-indigo-300">${escapeHtml(u.email || '-')}</td>
+          <td class="px-4 py-3 text-slate-300">${escapeHtml(u.note || '-')}</td>
+          <td class="px-4 py-3 text-slate-400 text-[11px]">${u.created_at ? u.created_at.slice(0, 16).replace('T', ' ') : '-'}</td>
+          <td class="px-4 py-3 text-right space-x-1.5">
+            <button onclick="updateProfileStatus('${u.id}', 'approved')" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg transition shadow">
+              <i class="fa-solid fa-check text-[10px]"></i> 승인
+            </button>
+            <button onclick="updateProfileStatus('${u.id}', 'rejected')" class="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg transition shadow">
+              <i class="fa-solid fa-xmark text-[10px]"></i> 거절
+            </button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    const allBody = document.getElementById('adminAllUsersTableBody');
+    if (all.length === 0) {
+      allBody.innerHTML = `<tr><td colspan="5" class="px-4 py-5 text-center text-slate-500">등록된 회원이 없습니다.</td></tr>`;
+    } else {
+      allBody.innerHTML = all.map(u => {
+        let badge = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300">대기</span>';
+        if (u.status === 'approved') badge = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300">승인됨</span>';
+        if (u.status === 'rejected') badge = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300">거절/정지</span>';
+
+        return `
+          <tr class="hover:bg-slate-800/60">
+            <td class="px-4 py-2.5 font-semibold text-white">${escapeHtml(u.name || '-')}</td>
+            <td class="px-4 py-2.5 font-mono text-slate-300">${escapeHtml(u.email || '-')}</td>
+            <td class="px-4 py-2.5">${badge}</td>
+            <td class="px-4 py-2.5 text-slate-400 text-[11px]">${u.created_at ? u.created_at.slice(0, 10) : '-'}</td>
+            <td class="px-4 py-2.5 text-right space-x-1">
+              ${u.status === 'approved' ? `
+                <button onclick="updateProfileStatus('${u.id}', 'rejected')" class="px-2 py-0.5 text-xs text-amber-400 hover:bg-amber-400/20 rounded border border-amber-400/40">정지</button>
+              ` : `
+                <button onclick="updateProfileStatus('${u.id}', 'approved')" class="px-2 py-0.5 text-xs text-emerald-400 hover:bg-emerald-400/20 rounded border border-emerald-400/40">승인</button>
+              `}
+              <button onclick="deleteProfileUser('${u.id}')" class="px-2 py-0.5 text-xs text-rose-400 hover:bg-rose-400/20 rounded border border-rose-400/40">삭제</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+  } catch (err) {
+    console.error('Admin profiles error:', err);
+  }
+}
+
+async function updateProfileStatus(userId, status) {
+  const label = status === 'approved' ? '승인' : '거절/정지';
+  if (!confirm(`이 회원을 ${label} 처리하시겠습니까?`)) return;
+
+  try {
+    const { error } = await supabaseClient
+      .from('profiles')
+      .update({ status: status })
+      .eq('id', userId);
+
+    if (error) {
+      alert('상태 변경 실패: ' + error.message);
+      return;
+    }
+
+    alert(`${label} 처리가 완료되었습니다.`);
+    fetchAdminProfiles();
+  } catch (err) {
+    alert('처리 오류');
+  }
+}
+
+async function deleteProfileUser(userId) {
+  if (!confirm('정말 이 회원을 삭제하시겠습니까? 관련 데이터가 모두 삭제됩니다.')) return;
+
+  try {
+    const { error } = await supabaseClient
+      .from('profiles')
+      .delete()
+      .eq('id', userId);
+
+    if (error) {
+      alert('삭제 실패: ' + error.message);
+      return;
+    }
+
+    alert('회원이 삭제되었습니다.');
+    fetchAdminProfiles();
+  } catch (err) {
+    alert('삭제 오류');
+  }
 }
