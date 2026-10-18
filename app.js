@@ -232,14 +232,27 @@ async function syncExamOverridesFromCloud() {
     try {
       const { data, error } = await supabaseClient.from('exam_overrides').select('*');
       if (!error && Array.isArray(data)) {
+        let deletedLecs = JSON.parse(localStorage.getItem('deleted_lectures') || '[]');
+        let deletedExs = JSON.parse(localStorage.getItem('deleted_exams') || '[]');
+
         data.forEach(item => {
           if (item.exam_id && item.exam_data) {
             localStorage.setItem(`custom_exam_override_${item.exam_id}`, JSON.stringify(item.exam_data));
             if (item.exam_data.answer_keys) {
               localStorage.setItem(`custom_answer_keys_${item.exam_id}`, JSON.stringify(item.exam_data.answer_keys));
             }
+            if (item.exam_data.is_deleted) {
+              if (item.exam_id.startsWith('deleted_lec_')) {
+                const docId = item.exam_id.replace('deleted_lec_', '');
+                if (!deletedLecs.includes(docId)) deletedLecs.push(docId);
+              } else {
+                if (!deletedExs.includes(item.exam_id)) deletedExs.push(item.exam_id);
+              }
+            }
           }
         });
+        localStorage.setItem('deleted_lectures', JSON.stringify(deletedLecs));
+        localStorage.setItem('deleted_exams', JSON.stringify(deletedExs));
       }
     } catch (e) {}
   }
@@ -364,9 +377,10 @@ async function loadLectures() {
       } catch (e) {}
     }
 
+    const deletedDocs = JSON.parse(localStorage.getItem('deleted_lectures') || '[]');
     const docMap = new Map();
-    cloudDocs.forEach(d => docMap.set(d.id, d));
-    staticDocs.forEach(d => { if (!docMap.has(d.id)) docMap.set(d.id, d); });
+    cloudDocs.forEach(d => { if (!deletedDocs.includes(d.id) && !d.is_deleted) docMap.set(d.id, d); });
+    staticDocs.forEach(d => { if (!deletedDocs.includes(d.id) && !d.is_deleted && !docMap.has(d.id)) docMap.set(d.id, d); });
     let docs = Array.from(docMap.values());
     docs.forEach(d => {
       if (d.unit_count === undefined && d.units) {
@@ -445,18 +459,36 @@ async function uploadLectureFiles(files) {
 }
 
 async function deleteLecture(docId) {
-  if (!confirm('이 강의 자료를 삭제하시겠습니까?')) return;
-  try {
-    const res = await fetch(`/api/lectures/${docId}`, {
-      method: 'DELETE',
-      headers: getUserHeaders()
-    });
-    if (res.ok) {
-      loadLectures();
-    }
-  } catch (err) {
-    alert('삭제 실패');
+  if (!confirm('이 강의 자료를 삭제하시겠습니까?\n삭제 시 모든 화면에서 즉시 제외됩니다.')) return;
+
+  // 1. Supabase shared_lectures 및 exam_overrides 기록
+  if (typeof supabaseClient !== 'undefined' && supabaseClient) {
+    try {
+      await supabaseClient.from('shared_lectures').delete().eq('id', docId);
+    } catch (e) {}
+    try {
+      await supabaseClient.from('exam_overrides').upsert({
+        exam_id: 'deleted_lec_' + docId,
+        subject_id: currentSubjectId || 'sub_fbdc79d0',
+        exam_data: { id: docId, is_deleted: true, type: 'lecture' },
+        updated_by: (currentUser ? currentUser.name : '이용자'),
+        updated_at: new Date().toISOString()
+      });
+    } catch (e) {}
   }
+
+  // 2. 로컬스토리지 보존
+  let deleted = JSON.parse(localStorage.getItem('deleted_lectures') || '[]');
+  if (!deleted.includes(docId)) deleted.push(docId);
+  localStorage.setItem('deleted_lectures', JSON.stringify(deleted));
+
+  // 3. 로컬 서버 환경 백엔드 API (조용히 호출)
+  try {
+    await fetch(`/api/lectures/${docId}`, { method: 'DELETE', headers: getUserHeaders() });
+  } catch (err) {}
+
+  alert('강의 자료가 삭제되었습니다.');
+  await loadLectures();
 }
 
 async function viewLectureUnits(docId) {
@@ -538,7 +570,18 @@ async function loadExams() {
     localExams.forEach(e => { if (!examMap.has(e.id)) examMap.set(e.id, e); });
     staticExams.forEach(e => { if (!examMap.has(e.id)) examMap.set(e.id, e); });
 
-    let exams = Array.from(examMap.values());
+    const deletedExams = JSON.parse(localStorage.getItem('deleted_exams') || '[]');
+    let exams = Array.from(examMap.values()).filter(e => {
+      if (deletedExams.includes(e.id) || e.is_deleted) return false;
+      const ov = localStorage.getItem(`custom_exam_override_${e.id}`);
+      if (ov) {
+        try {
+          const parsed = JSON.parse(ov);
+          if (parsed.is_deleted) return false;
+        } catch(err) {}
+      }
+      return true;
+    });
     exams.forEach(e => {
       if (e.question_count === undefined && e.questions) {
         e.question_count = e.questions.length;
@@ -776,18 +819,37 @@ async function submitPastedExam() {
 }
 
 async function deleteExam(examId) {
-  if (!confirm('이 족보 세트를 삭제하시겠습니까?')) return;
-  try {
-    const res = await fetch(`/api/exams/${examId}`, {
-      method: 'DELETE',
-      headers: getUserHeaders()
-    });
-    if (res.ok) {
-      loadExams();
-    }
-  } catch (err) {
-    alert('삭제 실패');
+  if (!confirm('정말로 이 족보 문항 세트를 삭제하시겠습니까?
+삭제 시 모든 화면 및 기출 풀이에서 제외됩니다.')) return;
+
+  // 1. Supabase shared_exams 및 exam_overrides 기록
+  if (typeof supabaseClient !== 'undefined' && supabaseClient) {
+    try {
+      await supabaseClient.from('shared_exams').delete().eq('id', examId);
+    } catch (e) {}
+    try {
+      await supabaseClient.from('exam_overrides').upsert({
+        exam_id: examId,
+        subject_id: currentSubjectId || 'sub_fbdc79d0',
+        exam_data: { id: examId, is_deleted: true, type: 'exam' },
+        updated_by: (currentUser ? currentUser.name : '이용자'),
+        updated_at: new Date().toISOString()
+      });
+    } catch (e) {}
   }
+
+  // 2. 로컬스토리지 보존
+  let deleted = JSON.parse(localStorage.getItem('deleted_exams') || '[]');
+  if (!deleted.includes(examId)) deleted.push(examId);
+  localStorage.setItem('deleted_exams', JSON.stringify(deleted));
+
+  // 3. 로컬 서버 백엔드 API (조용히 호출)
+  try {
+    await fetch(`/api/exams/${examId}`, { method: 'DELETE', headers: getUserHeaders() });
+  } catch (err) {}
+
+  alert('족보 문항 세트가 삭제되었습니다.');
+  await loadExams();
 }
 
 // ------------------- 선지 매칭 및 분석 -------------------
