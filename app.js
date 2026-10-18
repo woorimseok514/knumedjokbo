@@ -1083,6 +1083,49 @@ function stopSolverTimer() {
   }
 }
 
+function normalizeQuestionChoices(rawChoices) {
+  if (!Array.isArray(rawChoices)) return [];
+  const circleSymbols = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨'];
+  const normalized = [];
+
+  for (let i = 0; i < rawChoices.length; i++) {
+    const c = rawChoices[i];
+    const text = (typeof c === 'object' && c !== null ? c.text : String(c)) || '';
+    
+    // 선지 내부에 다른 선지 번호가 겹쳐서 들어있는지 탐지: 예) "4) ...", " 4) ...", "② ...", "(4) ..."
+    const match = text.match(/(?:[\s\.\,\;]|^)(?:([1-9])\)|(?:\(([1-9])\))|([①-⑨]))\s*(.+)$/);
+    if (match) {
+      let rawNum = match[1] || match[2];
+      if (!rawNum && match[3]) {
+        const idx = circleSymbols.indexOf(match[3]);
+        if (idx !== -1) rawNum = String(idx + 1);
+      }
+      
+      if (rawNum && parseInt(rawNum) > normalized.length + 1) {
+        const part1 = text.slice(0, match.index).replace(/[\.\,\s]+$/, '').trim();
+        const part2 = match[4].trim();
+        
+        normalized.push({
+          label: circleSymbols[normalized.length] || `(${normalized.length + 1})`,
+          text: part1
+        });
+        normalized.push({
+          label: circleSymbols[normalized.length] || `(${normalized.length + 1})`,
+          text: part2
+        });
+        continue;
+      }
+    }
+    
+    normalized.push({
+      label: (typeof c === 'object' && c.label) ? c.label : (circleSymbols[normalized.length] || `(${normalized.length + 1})`),
+      text: text
+    });
+  }
+
+  return normalized;
+}
+
 function cleanQuestionStem(stem) {
   if (!stem) return '';
   let s = String(stem);
@@ -1116,8 +1159,9 @@ function renderCurrentQuestion() {
   const choicesBox = document.getElementById('currentChoicesContainer');
   const currentAnswer = userAnswers[String(qNum)] || '';
 
-  if (q.choices && q.choices.length > 0) {
-    choicesBox.innerHTML = q.choices.map((c, cIdx) => {
+  const cleanChoices = normalizeQuestionChoices(q.choices || []);
+  if (cleanChoices.length > 0) {
+    choicesBox.innerHTML = cleanChoices.map((c, cIdx) => {
       const label = c.label || `(${cIdx + 1})`;
       const isSelected = currentAnswer === label;
       const activeClass = isSelected 
