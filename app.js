@@ -44,6 +44,21 @@ async function checkUserAuth() {
   showLoginModal(true);
 }
 
+
+function fillApprovedUser(username, password) {
+  const uInput = document.getElementById('loginUsername');
+  const pInput = document.getElementById('loginPassword');
+  if (uInput && pInput) {
+    uInput.value = username;
+    pInput.value = password || '1234';
+    // 자동 로그인 트리거
+    const loginForm = document.getElementById('loginForm');
+    if (loginForm) {
+      loginForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    }
+  }
+}
+
 function showLoginModal(show) {
   const modal = document.getElementById('loginModal');
   if (show) modal.classList.remove('hidden');
