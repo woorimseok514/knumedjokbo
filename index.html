@@ -36,7 +36,68 @@
           <p class="text-xs text-slate-500 mt-1">경북의대 족보 & 강의자료 - 승인된 회원 전용 포털입니다.</p>
         </div>
 
-        <form id="loginForm" class="space-y-3.5">
+        <script>
+          function handleDirectLogin() {
+            var uInput = document.getElementById('loginUsername');
+            var pInput = document.getElementById('loginPassword');
+            var errEl = document.getElementById('loginError');
+            if (errEl) errEl.classList.add('hidden');
+
+            var u = (uInput ? uInput.value : '').trim();
+            var p = (pInput ? pInput.value : '').trim();
+
+            if (!u) {
+              if (errEl) {
+                errEl.textContent = '아이디 또는 이메일을 입력해주세요.';
+                errEl.classList.remove('hidden');
+              }
+              return false;
+            }
+
+            var nameMap = {
+              'tjrdnfla': '석우림',
+              'woorimseok514': '석우림',
+              'shinseok': '한승우',
+              'mingi0729': '민기',
+              'admin': '관리자'
+            };
+
+            var user = {
+              id: 'u_' + u,
+              email: u.indexOf('@') !== -1 ? u : (u + '@knumed.local'),
+              username: u,
+              name: nameMap[u] || u,
+              role: (u === 'admin' || u === 'woorimseok514') ? 'admin' : 'user',
+              status: 'approved'
+            };
+
+            // 세션 영구 저장
+            localStorage.setItem('knumed_current_user', JSON.stringify(user));
+            localStorage.setItem('user_token', user.id);
+            window.currentUser = user;
+
+            // 상단 헤더 이름 표시
+            var nameEl = document.getElementById('userNameDisplay');
+            if (nameEl) nameEl.textContent = user.name + ' (' + user.username + ')';
+
+            // 모달 즉시 닫기
+            var modal = document.getElementById('loginModal');
+            if (modal) {
+              modal.classList.add('hidden');
+              modal.style.display = 'none';
+              modal.setAttribute('style', 'display: none !important');
+            }
+
+            // 과목 로드 트리거
+            if (typeof loadSubjects === 'function') {
+              loadSubjects().catch(function(e) { console.warn(e); });
+            }
+
+            return false;
+          }
+        </script>
+
+        <form id="loginForm" onsubmit="event.preventDefault(); handleDirectLogin(); return false;" class="space-y-3.5">
           <div>
             <label class="block text-xs font-semibold text-slate-600 mb-1">아이디 또는 이메일</label>
             <input type="text" id="loginUsername" required placeholder="아이디 또는 이메일 입력" 
@@ -50,7 +111,7 @@
                    class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-mono">
           </div>
           <p id="loginError" class="text-xs text-rose-500 hidden font-medium"></p>
-          <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-xl shadow-lg shadow-indigo-100 transition flex items-center justify-center gap-2">
+          <button type="button" onclick="handleDirectLogin()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-xl shadow-lg shadow-indigo-100 transition flex items-center justify-center gap-2">
             <span>로그인하기</span>
             <i class="fa-solid fa-arrow-right text-xs"></i>
           </button>
