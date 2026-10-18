@@ -460,7 +460,8 @@ async function uploadLectureFiles(files) {
 }
 
 async function deleteLecture(docId) {
-  if (!confirm('이 강의 자료를 삭제하시겠습니까?\n삭제 시 모든 화면에서 즉시 제외됩니다.')) return;
+  if (!confirm('이 강의 자료를 삭제하시겠습니까?
+삭제 시 모든 화면에서 즉시 제외됩니다.')) return;
 
   // 1. Supabase shared_lectures 및 exam_overrides 기록
   if (typeof supabaseClient !== 'undefined' && supabaseClient) {
@@ -820,8 +821,7 @@ async function submitPastedExam() {
 }
 
 async function deleteExam(examId) {
-  if (!confirm('정말로 이 족보 문항 세트를 삭제하시겠습니까?
-삭제 시 모든 화면 및 기출 풀이에서 제외됩니다.')) return;
+  if (!confirm('정말로 이 족보 문항 세트를 삭제하시겠습니까?\n삭제 시 모든 화면 및 기출 풀이에서 제외됩니다.')) return;
 
   // 1. Supabase shared_exams 및 exam_overrides 기록
   if (typeof supabaseClient !== 'undefined' && supabaseClient) {
@@ -847,7 +847,7 @@ async function deleteExam(examId) {
   // 3. 로컬 서버 백엔드 API (조용히 호출)
   try {
     await fetch(`/api/exams/${examId}`, { method: 'DELETE', headers: getUserHeaders() });
-  } catch (err) {}
+  } catch (e) {}
 
   alert('족보 문항 세트가 삭제되었습니다.');
   await loadExams();
