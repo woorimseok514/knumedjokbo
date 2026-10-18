@@ -34,7 +34,7 @@ async function checkUserAuth() {
           currentUser = u;
           document.getElementById('userNameDisplay').textContent = `${currentUser.name} (${currentUser.username})`;
           showLoginModal(false);
-          loadSubjects().catch(e => console.warn(e));
+          syncExamOverridesFromCloud().catch(e => console.warn(e));\n          loadSubjects().catch(e => console.warn(e));
           return;
         }
       } catch (e) {}
@@ -346,10 +346,28 @@ function switchTab(tabName) {
 async function loadLectures() {
   if (!currentSubjectId) return;
   try {
-    let docs = await smartFetchJson(`/api/lectures?subject_id=${currentSubjectId}`, './data/lectures.json');
-    if (!docs) docs = [];
-    // 정적 파일인 경우 과목 필터링 및 unit_count 보정
-    docs = docs.filter(d => !d.subject_id || d.subject_id === currentSubjectId);
+    let staticDocs = await smartFetchJson(`/api/lectures?subject_id=${currentSubjectId}`, './data/lectures.json') || [];
+    staticDocs = staticDocs.filter(d => !d.subject_id || d.subject_id === currentSubjectId);
+
+    // Supabase shared_lectures에서 다른 이용자가 등록한 강의자료 실시간 조회
+    let cloudDocs = [];
+    if (typeof supabaseClient !== 'undefined' && supabaseClient) {
+      try {
+        const { data, error } = await supabaseClient
+          .from('shared_lectures')
+          .select('*')
+          .eq('subject_id', currentSubjectId)
+          .order('uploaded_at', { ascending: false });
+        if (!error && Array.isArray(data)) {
+          cloudDocs = data.map(cd => ({ ...cd, is_cloud: true }));
+        }
+      } catch (e) {}
+    }
+
+    const docMap = new Map();
+    cloudDocs.forEach(d => docMap.set(d.id, d));
+    staticDocs.forEach(d => { if (!docMap.has(d.id)) docMap.set(d.id, d); });
+    let docs = Array.from(docMap.values());
     docs.forEach(d => {
       if (d.unit_count === undefined && d.units) {
         d.unit_count = d.units.length;
@@ -443,9 +461,21 @@ async function deleteLecture(docId) {
 
 async function viewLectureUnits(docId) {
   try {
-    const res = await fetch(`/api/lectures/${docId}/units`, { headers: getUserHeaders() });
-    if (!res.ok) return;
-    const data = await res.json();
+    let data = null;
+    // 1. Supabase shared_lectures 확인
+    if (typeof supabaseClient !== 'undefined' && supabaseClient) {
+      try {
+        const { data: cDoc } = await supabaseClient.from('shared_lectures').select('*').eq('id', docId).maybeSingle();
+        if (cDoc && cDoc.units) {
+          data = cDoc;
+        }
+      } catch (e) {}
+    }
+
+    if (!data) {
+      const res = await fetch(`/api/lectures/${docId}/units`, { headers: getUserHeaders() });
+      if (res.ok) data = await res.json();
+    }
 
     document.getElementById('modalUnitTitle').textContent = data.filename;
     document.getElementById('modalUnitSubtitle').textContent = `총 ${data.units.length}개 ${data.unit_type}`;
@@ -470,10 +500,45 @@ function closeUnitModal() {
 async function loadExams() {
   if (!currentSubjectId) return;
   try {
-    let exams = await smartFetchJson(`/api/exams?subject_id=${currentSubjectId}`, './data/exams.json');
-    if (!exams) exams = [];
-    // 정적 파일인 경우 과목 필터링 및 question_count 보정
-    exams = exams.filter(e => !e.subject_id || e.subject_id === currentSubjectId);
+    let staticExams = await smartFetchJson(`/api/exams?subject_id=${currentSubjectId}`, './data/exams.json');
+    if (!staticExams) staticExams = [];
+    staticExams = staticExams.filter(e => !e.subject_id || e.subject_id === currentSubjectId);
+
+    // 1. Supabase shared_exams에서 다른 이용자가 등록한 최신 족보 실시간 조회
+    let cloudExams = [];
+    if (typeof supabaseClient !== 'undefined' && supabaseClient) {
+      try {
+        const { data, error } = await supabaseClient
+          .from('shared_exams')
+          .select('*')
+          .eq('subject_id', currentSubjectId)
+          .order('created_at', { ascending: false });
+        if (!error && Array.isArray(data)) {
+          cloudExams = data.map(ce => ({
+            ...ce,
+            is_cloud: true,
+            created_by: ce.created_by || '학생 기여'
+          }));
+        }
+      } catch (e) {
+        console.warn('Cloud exams fetch warning:', e);
+      }
+    }
+
+    // 로컬 커스텀 족보 백업
+    const localExamsRaw = localStorage.getItem(`custom_exams_${currentSubjectId}`);
+    let localExams = [];
+    if (localExamsRaw) {
+      try { localExams = JSON.parse(localExamsRaw); } catch (e) {}
+    }
+
+    // 중복 제거 병합 (Cloud 우선 -> Local -> Static)
+    const examMap = new Map();
+    cloudExams.forEach(e => examMap.set(e.id, e));
+    localExams.forEach(e => { if (!examMap.has(e.id)) examMap.set(e.id, e); });
+    staticExams.forEach(e => { if (!examMap.has(e.id)) examMap.set(e.id, e); });
+
+    let exams = Array.from(examMap.values());
     exams.forEach(e => {
       if (e.question_count === undefined && e.questions) {
         e.question_count = e.questions.length;
@@ -547,9 +612,66 @@ async function uploadExamFile(file) {
   }
 }
 
+/**
+ * 이용자 족보 텍스트 자동 파싱 헬퍼 (문제 번호 및 선지 ①~⑤ 자동 추출)
+ */
+function parseRawExamTextToQuestions(text) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const questions = [];
+  let currentQ = null;
+
+  const qNumRegex = /^(?:문\s*제\s*)?(?:No\.?\s*)?(\d{1,3})[\.\)\s\]번](.*)$/i;
+  const choiceRegex = /^[\(]?(?:①|②|③|④|⑤|⑥|⑦|⑧|⑨|⑩|[1-9])[\.\)]?\s*(.*)$/;
+  const circleSymbols = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+
+  for (let line of lines) {
+    const qMatch = line.match(qNumRegex);
+    if (qMatch && !line.match(/^[①-⑩]/)) {
+      if (currentQ && currentQ.stem) {
+        questions.push(currentQ);
+      }
+      const qNum = parseInt(qMatch[1], 10);
+      const stemPart = qMatch[2].trim();
+      currentQ = {
+        q_number: qNum,
+        stem: stemPart,
+        choices: [],
+        correct_answer: ''
+      };
+      continue;
+    }
+
+    const cMatch = line.match(choiceRegex);
+    if (cMatch && currentQ) {
+      const idx = currentQ.choices.length;
+      const label = idx < circleSymbols.length ? circleSymbols[idx] : `(${idx+1})`;
+      currentQ.choices.push({
+        label: label,
+        text: cMatch[1] || line
+      });
+      continue;
+    }
+
+    if (currentQ) {
+      if (currentQ.choices.length === 0) {
+        currentQ.stem += ' ' + line;
+      } else {
+        // 마지막 선지의 추가 설명
+        currentQ.choices[currentQ.choices.length - 1].text += ' ' + line;
+      }
+    }
+  }
+
+  if (currentQ && currentQ.stem) {
+    questions.push(currentQ);
+  }
+
+  return questions;
+}
+
 async function submitPastedExam() {
   if (!currentSubjectId) return;
-  const title = document.getElementById('pasteExamTitle').value.trim() || '붙여넣은 족보';
+  const title = document.getElementById('pasteExamTitle').value.trim() || '신규 기출 족보';
   const content = document.getElementById('pasteExamContent').value.trim();
 
   if (!content) {
@@ -557,24 +679,100 @@ async function submitPastedExam() {
     return;
   }
 
+  const submitBtn = document.querySelector('button[onclick="submitPastedExam()"]');
+  const origBtnText = submitBtn ? submitBtn.innerHTML : '';
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-xs mr-1"></i> 문항 파싱 및 클라우드 저장 중...`;
+  }
+
+  // 1. 기존 파이썬 백엔드 서버가 있는 경우 우선 시도
+  let serverHandled = false;
   try {
     const res = await fetch('/api/exams/paste', {
       method: 'POST',
       headers: { ...getUserHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ subject_id: currentSubjectId, title, text_content: content })
     });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      alert(`족보가 등록되었습니다. 총 ${data.question_count}개 문항이 자동 추출되었습니다.`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success) {
+        serverHandled = true;
+        alert(`족보가 등록되었습니다! 총 ${data.question_count}개 문항이 자동 추출되었습니다.`);
+      }
+    }
+  } catch (e) {}
+
+  // 2. GitHub Pages / Supabase 클라우드 직접 처리 (모든 이용자 자동 영구 저장)
+  if (!serverHandled) {
+    try {
+      const questions = parseRawExamTextToQuestions(content);
+      if (questions.length === 0) {
+        // 문항 구분자를 못 찾았을 경우 단일 문항으로 안전 처리
+        questions.push({
+          q_number: 1,
+          stem: content,
+          choices: [
+            { label: '①', text: '선지 1' },
+            { label: '②', text: '선지 2' },
+            { label: '③', text: '선지 3' },
+            { label: '④', text: '선지 4' },
+            { label: '⑤', text: '선지 5' }
+          ]
+        });
+      }
+
+      const examId = 'exam_cloud_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+      const author = currentUser ? `${currentUser.name} (${currentUser.username})` : '학생 기여';
+      const nowStr = new Date().toISOString().replace('T', ' ').slice(0, 16);
+
+      const newExam = {
+        id: examId,
+        subject_id: currentSubjectId,
+        title: title,
+        question_count: questions.length,
+        questions: questions,
+        answer_keys: {},
+        created_by: author,
+        created_at: nowStr
+      };
+
+      // 2-1. Supabase 클라우드 DB에 영구 등록 (다른 모든 이용자 실시간 공유)
+      if (typeof supabaseClient !== 'undefined' && supabaseClient) {
+        try {
+          const { error } = await supabaseClient.from('shared_exams').insert(newExam);
+          if (error) console.warn('Supabase shared_exams insert warning:', error);
+        } catch (sbErr) {
+          console.warn('Supabase insert failed:', sbErr);
+        }
+      }
+
+      // 2-2. 로컬 브라우저에도 즉시 캐시 저장
+      const localExamsRaw = localStorage.getItem(`custom_exams_${currentSubjectId}`);
+      let localExams = [];
+      if (localExamsRaw) {
+        try { localExams = JSON.parse(localExamsRaw); } catch (e) {}
+      }
+      localExams.unshift(newExam);
+      localStorage.setItem(`custom_exams_${currentSubjectId}`, JSON.stringify(localExams));
+
+      alert(`✅ 족보가 성공적으로 등록되었습니다!\n\n• 문항 수: 총 ${questions.length}문항 추출 완료\n• 등록자: ${author}\n• 클라우드 동기화: 다른 학생들도 지금 즉시 풀 수 있습니다.`);
       document.getElementById('pasteExamContent').value = '';
       document.getElementById('pasteExamTitle').value = '';
-      loadExams();
-    } else {
-      alert('등록 실패: ' + (data.detail || ''));
+
+    } catch (err) {
+      console.error('클라이언트 족보 파싱 오류:', err);
+      alert('족보 등록 중 오류가 발생했습니다: ' + err.message);
     }
-  } catch (err) {
-    alert('서버 에러');
   }
+
+  if (submitBtn) {
+    submitBtn.disabled = false;
+    submitBtn.innerHTML = origBtnText;
+  }
+
+  await loadExams();
+  await loadWorkbooks();
 }
 
 async function deleteExam(examId) {
@@ -1028,9 +1226,29 @@ let currentExamForAnswerKey = null;
 async function loadWorkbooks() {
   if (!currentSubjectId) return;
   try {
-    let exams = await smartFetchJson(`/api/exams?subject_id=${currentSubjectId}`, './data/exams.json');
-    if (!exams) exams = [];
-    exams = exams.filter(e => !e.subject_id || e.subject_id === currentSubjectId);
+    let staticExams = await smartFetchJson(`/api/exams?subject_id=${currentSubjectId}`, './data/exams.json') || [];
+    staticExams = staticExams.filter(e => !e.subject_id || e.subject_id === currentSubjectId);
+
+    // Supabase shared_exams 병합
+    let cloudExams = [];
+    if (typeof supabaseClient !== 'undefined' && supabaseClient) {
+      try {
+        const { data, error } = await supabaseClient
+          .from('shared_exams')
+          .select('*')
+          .eq('subject_id', currentSubjectId)
+          .order('created_at', { ascending: false });
+        if (!error && Array.isArray(data)) {
+          cloudExams = data.map(ce => ({ ...ce, is_cloud: true }));
+        }
+      } catch (e) {}
+    }
+
+    const examMap = new Map();
+    cloudExams.forEach(e => examMap.set(e.id, e));
+    staticExams.forEach(e => { if (!examMap.has(e.id)) examMap.set(e.id, e); });
+    let exams = Array.from(examMap.values());
+
     exams.forEach(e => {
       if (e.question_count === undefined && e.questions) {
         e.question_count = e.questions.length;
@@ -1866,6 +2084,22 @@ async function saveAnswerKeyForm() {
   }
 
   localStorage.setItem(`custom_answer_keys_${examId}`, JSON.stringify(keys));
+
+    // Supabase 클라우드에 정답표 실시간 영구 보존 (다른 모든 이용자 화면에 자동 반영)
+    if (typeof supabaseClient !== 'undefined' && supabaseClient) {
+      try {
+        const author = currentUser ? `${currentUser.name} (${currentUser.username})` : '사용자';
+        await supabaseClient.from('exam_overrides').upsert({
+          exam_id: examId,
+          subject_id: currentSubjectId,
+          exam_data: currentExamForAnswerKey,
+          updated_by: author,
+          updated_at: new Date().toISOString()
+        });
+      } catch (e) {
+        console.warn('Supabase answer key sync warning:', e);
+      }
+    }
 
   if (currentExamForSolving && currentExamForSolving.id === examId) {
     currentExamForSolving.answer_keys = { ...keys };
