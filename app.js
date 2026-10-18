@@ -460,8 +460,7 @@ async function uploadLectureFiles(files) {
 }
 
 async function deleteLecture(docId) {
-  if (!confirm('이 강의 자료를 삭제하시겠습니까?
-삭제 시 모든 화면에서 즉시 제외됩니다.')) return;
+  if (!confirm('이 강의 자료를 삭제하시겠습니까?\n삭제 시 모든 화면에서 즉시 제외됩니다.')) return;
 
   // 1. Supabase shared_lectures 및 exam_overrides 기록
   if (typeof supabaseClient !== 'undefined' && supabaseClient) {
