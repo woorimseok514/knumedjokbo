@@ -787,56 +787,80 @@ function renderChoiceCard(choice, qIdx, cIdx) {
 
   const badgeText = top?.badge || '직접 언급 없음';
   const docTitle = top ? top.doc_title : '-';
-  const unitLoc = top ? `${top.unit_type} ${top.unit_number}` : '-';
+  const pageNum = top ? (top.unit_number || top.page_number || '-') : '-';
+  const unitLoc = top ? `${top.unit_type || '슬라이드'} ${pageNum}페이지` : '-';
   const score = top ? `${top.score}%` : '0%';
-  const highlightedSnippet = top?.highlighted_snippet || (top?.snippet ? escapeHtml(top.snippet) : '강의 자료에서 관련 구문을 찾을 수 없습니다.');
+  
+  // 완전한 핵심 문장 추출값 (단순 발췌가 아닌 전체 내용을 담은 온전한 문장)
+  const fullSentence = top?.highlighted_snippet || top?.full_sentence || top?.snippet || '강의 자료에서 관련 구문을 찾을 수 없습니다.';
+  const cleanKeywords = (top?.matched_keywords || []).filter(k => k && k.length >= 2);
 
   return `
     <div class="pt-3.5 first:pt-0">
-      <div class="bg-slate-50/50 border border-slate-200/80 rounded-xl p-4 border-l-4 ${borderLeft}">
-        <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-2 mb-2.5">
+      <div class="bg-slate-50/70 border border-slate-200/90 rounded-2xl p-4 border-l-4 ${borderLeft} space-y-3 shadow-xs">
+        <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
           <div class="flex items-start gap-2.5 flex-1">
-            <span class="font-bold text-indigo-700 text-sm shrink-0">${escapeHtml(label)}</span>
-            <p class="font-semibold text-slate-900 text-sm">${escapeHtml(text)}</p>
+            <span class="w-6 h-6 rounded-lg bg-indigo-600 text-white font-bold text-xs flex items-center justify-center shrink-0 mt-0.5">${escapeHtml(label)}</span>
+            <p class="font-bold text-slate-900 text-sm leading-snug pt-0.5">${escapeHtml(text)}</p>
           </div>
 
           <div class="flex items-center gap-2 shrink-0">
-            <span class="text-xs font-bold px-2.5 py-1 rounded-full border ${badgeColor} flex items-center gap-1.5">
+            <span class="text-xs font-bold px-2.5 py-1 rounded-full border ${badgeColor} flex items-center gap-1.5 shadow-2xs">
               <i class="fa-solid ${badgeIcon} text-[11px]"></i>
-              ${badgeText} (${score})
+              <span>${badgeText}</span>
+            </span>
+            <span class="text-xs font-mono font-bold text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
+              일치도 ${score}
             </span>
           </div>
         </div>
 
         ${top ? `
-          <div class="flex flex-wrap items-center gap-2 text-xs text-slate-500 mb-2 bg-white px-3 py-1.5 rounded-lg border border-slate-100">
-            <span class="font-semibold text-slate-700 flex items-center gap-1">
-              <i class="fa-regular fa-file-powerpoint text-indigo-500"></i>
-              ${escapeHtml(docTitle)}
+          <!-- 1. PPT 파일명 및 정확한 슬라이드 페이지 번호 (강조 박스) -->
+          <div class="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200/80 text-xs">
+            <div class="flex items-center gap-2 font-bold text-amber-900">
+              <i class="fa-solid fa-file-powerpoint text-amber-600 text-sm"></i>
+              <span class="truncate max-w-md">${escapeHtml(docTitle)}</span>
+            </div>
+            <span class="px-2.5 py-1 bg-amber-500 text-white font-bold rounded-lg text-xs shadow-xs">
+              ${unitLoc}
             </span>
-            <span class="text-slate-300">|</span>
-            <span class="font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">${unitLoc}</span>
-            <span class="text-slate-300">|</span>
-            <span class="text-slate-400">일치 키워드: ${(top.matched_keywords || []).map(k => `<b class="text-slate-600">${escapeHtml(k)}</b>`).join(', ') || '없음'}</span>
           </div>
-        ` : ''}
 
-        <div class="bg-white p-3 rounded-lg border border-slate-200 text-xs leading-relaxed text-slate-700 font-sans">
-          <p class="text-[11px] font-bold text-slate-400 mb-1 flex items-center gap-1">
-            <i class="fa-solid fa-quote-left text-[10px]"></i>
-            강의 자료 언급 문맥 발췌
-          </p>
-          <div class="text-slate-800">${highlightedSnippet}</div>
-        </div>
+          <!-- 2. 전체 내용을 온전히 담고 있는 핵심 전체 문장 (Full Sentence) -->
+          <div class="p-3.5 rounded-xl bg-white border border-indigo-100 shadow-2xs space-y-1.5">
+            <div class="flex items-center justify-between text-[11px] font-bold text-indigo-700">
+              <span class="flex items-center gap-1.5">
+                <i class="fa-solid fa-quote-left text-indigo-500 text-xs"></i>
+                <span>슬라이드 내 핵심 전체 문장:</span>
+              </span>
+              <span class="text-[10px] text-slate-400 font-medium">강의록 원문 매칭</span>
+            </div>
+            <div class="font-sans text-xs text-slate-800 leading-relaxed bg-indigo-50/30 p-2.5 rounded-lg border border-indigo-50 font-medium">
+              "${fullSentence}"
+            </div>
+          </div>
 
-        ${top ? `
-          <div class="mt-2.5 flex items-center justify-end gap-2 text-xs">
+          <!-- 3. 핵심 키워드 태그 (조사 및 it, as, to 등 배제된 순수 전문어) -->
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
+            <div class="flex items-center gap-1.5 flex-wrap">
+              <span class="text-slate-400 text-[11px] font-semibold">핵심 전문어:</span>
+              ${cleanKeywords.length > 0 ? cleanKeywords.map(k => `
+                <span class="px-2 py-0.5 bg-slate-200/70 text-slate-700 rounded-md text-[10px] font-bold">${escapeHtml(k)}</span>
+              `).join('') : '<span class="text-slate-400 text-[10px]">일치 용어 없음</span>'}
+            </div>
+
             <button onclick="previewRawSlide('${escapeHtml(docTitle)}', '${unitLoc}', ${qIdx}, ${cIdx})" 
-                    class="text-indigo-600 hover:text-indigo-800 font-medium px-2 py-1 rounded hover:bg-indigo-50 transition">
-              <i class="fa-regular fa-eye text-[11px]"></i> 해당 ${top.unit_type} 전체 본문 보기
+                    class="text-indigo-600 hover:text-indigo-800 font-bold px-2.5 py-1 rounded-lg hover:bg-indigo-50 transition text-xs flex items-center gap-1">
+              <i class="fa-regular fa-file-lines text-[11px]"></i>
+              <span>슬라이드 원문 전체 보기</span>
             </button>
           </div>
-        ` : ''}
+        ` : `
+          <div class="p-3 text-center text-xs text-slate-400 bg-white rounded-xl border border-slate-200">
+            강의 자료에서 직접적인 언급을 찾을 수 없습니다.
+          </div>
+        `}
       </div>
     </div>
   `;
