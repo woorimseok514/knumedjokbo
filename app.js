@@ -1655,12 +1655,44 @@ function renderAnswerKeyQuestionsList() {
   if (!container) return;
 
   const existingKeys = currentExamForAnswerKey.answer_keys || {};
-  const standardChoices = ['①', '②', '③', '④', '⑤'];
+  const circleSymbols = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
 
   container.innerHTML = (currentExamForAnswerKey.questions || []).map((q, idx) => {
     const qNum = String(q.q_number || (idx + 1));
     const currentKey = existingKeys[qNum] || '';
-    const isSubjective = !q.choices || q.choices.length === 0;
+    const cleanChoices = normalizeQuestionChoices(q.choices || []);
+    const isSubjective = cleanChoices.length === 0 && (!q.choices || q.choices.length === 0);
+
+    // 선지 개수(4개, 5개, 7개 등)에 맞추어 동적으로 버튼 리스트 생성
+    let choiceButtonsHtml = '';
+    if (!isSubjective) {
+      const count = cleanChoices.length > 0 ? cleanChoices.length : 5;
+      const buttons = [];
+      for (let cIdx = 0; cIdx < count; cIdx++) {
+        const symbol = circleSymbols[cIdx] || `(${cIdx + 1})`;
+        const digit = String(cIdx + 1);
+        const isSelected = String(currentKey) === symbol || String(currentKey) === digit;
+        const activeClass = isSelected
+          ? 'bg-indigo-600 text-white font-bold border-indigo-600 shadow-sm ring-1 ring-indigo-400'
+          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-200/70';
+        buttons.push(`
+          <button type="button" onclick="quickSetAnswerKey('${qNum}', '${symbol}')" 
+                  class="min-w-[28px] h-7 px-1.5 flex items-center justify-center text-xs rounded-lg border transition ${activeClass}">
+            ${symbol}
+          </button>
+        `);
+      }
+      choiceButtonsHtml = `
+        <div class="flex items-center gap-1.5">
+          <span class="text-xs text-slate-500 font-semibold mr-1">객관식 (${count}지선다):</span>
+          <div class="flex flex-wrap gap-1">
+            ${buttons.join('')}
+          </div>
+        </div>
+      `;
+    } else {
+      choiceButtonsHtml = `<span class="text-xs text-indigo-600 font-semibold"><i class="fa-solid fa-pen"></i> 주관식/서술형 문항</span>`;
+    }
 
     return `
       <div class="p-4 bg-slate-50 hover:bg-slate-100/80 transition rounded-2xl border border-slate-200/90 space-y-3">
@@ -1677,25 +1709,7 @@ function renderAnswerKeyQuestionsList() {
         </div>
         
         <div class="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-slate-200/60">
-          ${!isSubjective ? `
-            <div class="flex items-center gap-1.5">
-              <span class="text-xs text-slate-500 font-semibold mr-1">객관식:</span>
-              <div class="flex gap-1">
-                ${standardChoices.map(opt => {
-                  const isSelected = String(currentKey) === String(opt);
-                  const activeClass = isSelected
-                    ? 'bg-indigo-600 text-white font-bold border-indigo-600 shadow-sm'
-                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-200/70';
-                  return `
-                    <button type="button" onclick="quickSetAnswerKey('${qNum}', '${opt}')" 
-                            class="w-7 h-7 flex items-center justify-center text-xs rounded-lg border transition ${activeClass}">
-                      ${opt}
-                    </button>
-                  `;
-                }).join('')}
-              </div>
-            </div>
-          ` : '<span class="text-xs text-indigo-600 font-semibold"><i class="fa-solid fa-pen"></i> 주관식/서술형 문항</span>'}
+          ${choiceButtonsHtml}
 
           <!-- 직접 입력창 -->
           <div class="flex items-center gap-2 flex-1 max-w-xs justify-end">
