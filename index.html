@@ -6,7 +6,7 @@
   <title>knumed2026jokbo | 경북의대 족보 & 강의자료 매칭 포털</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="./style.css">
 </head>
 <body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col font-sans antialiased">
 
@@ -38,16 +38,15 @@
 
         <form id="loginForm" class="space-y-3.5">
           <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1">아이디</label>
-            <input type="text" id="loginUsername" value="user1" required placeholder="아이디 입력" 
+            <label class="block text-xs font-semibold text-slate-600 mb-1">아이디 또는 이메일</label>
+            <input type="text" id="loginUsername" required placeholder="아이디 또는 이메일 입력" 
                    class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
           </div>
           <div>
             <div class="flex justify-between items-center mb-1">
               <label class="block text-xs font-semibold text-slate-600">비밀번호</label>
-              <span class="text-[11px] text-indigo-600 font-mono">기본계정: user1234!</span>
             </div>
-            <input type="password" id="loginPassword" value="user1234!" required placeholder="비밀번호 입력" 
+            <input type="password" id="loginPassword" required placeholder="비밀번호 입력" 
                    class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-mono">
           </div>
           <p id="loginError" class="text-xs text-rose-500 hidden font-medium"></p>
@@ -722,6 +721,9 @@
     </div>
   </div>
 
-  <script src="/static/app.js"></script>
+  <!-- Supabase JS SDK v2 -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./supabase-config.js"></script>
+  <script src="./app.js"></script>
 </body>
 </html>

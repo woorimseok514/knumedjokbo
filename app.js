@@ -21,27 +21,27 @@ function getUserHeaders() {
   return headers;
 }
 
-// ------------------- 인증 및 로그인 -------------------
+// ------------------- 인증 및 로그인 (Supabase 기반) -------------------
 
 async function checkUserAuth() {
-  if (!userToken) {
-    showLoginModal(true);
-    return;
-  }
   try {
-    const res = await fetch('/api/auth/me', { headers: getUserHeaders() });
-    const data = await res.json();
-    if (data.authenticated) {
-      currentUser = data.user;
-      document.getElementById('userNameDisplay').textContent = `${currentUser.name} (${currentUser.username})`;
-      showLoginModal(false);
-      await loadSubjects();
-    } else {
-      showLoginModal(true);
+    // 1. Supabase 세션 확인
+    if (typeof supabaseGetCurrentUser === 'function') {
+      const sbUser = await supabaseGetCurrentUser();
+      if (sbUser) {
+        currentUser = sbUser;
+        document.getElementById('userNameDisplay').textContent = `${currentUser.name} (${currentUser.username})`;
+        showLoginModal(false);
+        await loadSubjects();
+        return;
+      }
     }
   } catch (err) {
-    showLoginModal(true);
+    console.warn('Supabase auth check error:', err);
   }
+
+  // 로그인되지 않은 경우 모달 표시
+  showLoginModal(true);
 }
 
 function showLoginModal(show) {
@@ -70,7 +70,7 @@ function switchAuthTab(tab) {
 }
 
 function initAuthForms() {
-  // 로그인 폼
+  // 로그인 폼 (Supabase 연동)
   const loginForm = document.getElementById('loginForm');
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -79,32 +79,33 @@ function initAuthForms() {
     const errEl = document.getElementById('loginError');
     errEl.classList.add('hidden');
 
+    const submitBtn = loginForm.querySelector('button[type="submit"]');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-xs"></i> <span>로그인 확인 중...</span>`;
+
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: uInput.value.trim(),
-          password: pInput.value
-        })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        userToken = data.token;
-        localStorage.setItem('user_token', userToken);
-        showLoginModal(false);
-        checkUserAuth();
-      } else {
-        errEl.textContent = data.detail || '로그인 실패';
-        errEl.classList.remove('hidden');
+      if (typeof supabaseLogin === 'function') {
+        const res = await supabaseLogin(uInput.value.trim(), pInput.value);
+        if (res.success) {
+          currentUser = res.user;
+          document.getElementById('userNameDisplay').textContent = `${currentUser.name} (${currentUser.username})`;
+          showLoginModal(false);
+          await loadSubjects();
+          return;
+        }
       }
+      throw new Error('인증 모듈이 올바르게 초기화되지 않았습니다.');
     } catch (err) {
-      errEl.textContent = '서버 통신 오류';
+      errEl.textContent = err.message || '로그인 실패';
       errEl.classList.remove('hidden');
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = originalText;
     }
   });
 
-  // 가입 신청 폼
+  // 가입 신청 폼 (Supabase 연동)
   const regForm = document.getElementById('registerForm');
   regForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -114,51 +115,87 @@ function initAuthForms() {
     const note = document.getElementById('regNote').value.trim();
     const msgEl = document.getElementById('regMsg');
 
+    const submitBtn = regForm.querySelector('button[type="submit"]');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-xs"></i> <span>신청서 전송 중...</span>`;
+
     try {
-      const res = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, username, password, note })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        msgEl.textContent = data.message;
-        msgEl.className = 'text-xs text-emerald-600 font-bold block p-2 bg-emerald-50 rounded-lg';
-        regForm.reset();
-        setTimeout(() => switchAuthTab('login'), 2500);
-      } else {
-        msgEl.textContent = data.detail || '신청 실패';
-        msgEl.className = 'text-xs text-rose-500 font-semibold block';
+      if (typeof supabaseRegister === 'function') {
+        const res = await supabaseRegister(username, password, name, note);
+        if (res.success) {
+          msgEl.textContent = res.message;
+          msgEl.className = 'text-xs text-emerald-600 font-bold block p-2.5 bg-emerald-50 rounded-lg border border-emerald-200';
+          regForm.reset();
+          setTimeout(() => switchAuthTab('login'), 3000);
+          return;
+        }
       }
+      throw new Error('가입 처리 모듈 오류');
     } catch (err) {
-      msgEl.textContent = '서버 통신 오류';
-      msgEl.className = 'text-xs text-rose-500 font-semibold block';
+      msgEl.textContent = err.message || '가입 신청 중 오류가 발생했습니다.';
+      msgEl.className = 'text-xs text-rose-500 font-semibold block p-2 bg-rose-50 rounded-lg border border-rose-200';
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = originalText;
     }
   });
 }
 
-function userLogout() {
+async function userLogout() {
   if (confirm('로그아웃 하시겠습니까?')) {
+    if (typeof supabaseLogout === 'function') {
+      await supabaseLogout();
+    }
     localStorage.removeItem('user_token');
     userToken = '';
     window.location.reload();
   }
 }
 
+// ------------------- 정적 데이터 & API 스마트 패치 헬퍼 -------------------
+
+async function smartFetchJson(apiEndpoint, staticJsonPath) {
+  try {
+    const res = await fetch(apiEndpoint, { headers: getUserHeaders() });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (e) {
+    // API 서버가 없는 GitHub Pages 환경일 때 fallback 시도
+  }
+
+  // 1차 fallback: 상대 경로
+  try {
+    const resStatic = await fetch(staticJsonPath);
+    if (resStatic.ok) {
+      return await resStatic.json();
+    }
+  } catch (e) {}
+
+  // 2차 fallback: 상위 디렉토리 data 폴더
+  try {
+    const altPath = staticJsonPath.startsWith('./') ? `.${staticJsonPath}` : `../${staticJsonPath}`;
+    const resAlt = await fetch(altPath);
+    if (resAlt.ok) {
+      return await resAlt.json();
+    }
+  } catch (e) {}
+
+  return null;
+}
+
 // ------------------- 과목 관리 -------------------
 
 async function loadSubjects() {
   try {
-    const res = await fetch('/api/subjects', { headers: getUserHeaders() });
-    if (!res.ok) return;
-    const subs = await res.json();
-
-    const sel = document.getElementById('activeSubjectSelect');
-    if (subs.length === 0) {
-      sel.innerHTML = '<option value="">등록된 과목이 없습니다 (관리자 문의)</option>';
-      return;
+    let subs = await smartFetchJson('/api/subjects', './data/subjects.json');
+    if (!subs || subs.length === 0) {
+      // 기본 과목 fallback
+      subs = [{ id: "sub_cell_mol_2026", name: "의학세포분자생물학 (기출 문제은행)", description: "2022~2025학년도 족보 및 강의자료" }];
     }
 
+    const sel = document.getElementById('activeSubjectSelect');
     sel.innerHTML = subs.map(s => `
       <option value="${s.id}" ${s.id === currentSubjectId ? 'selected' : ''}>
         ${escapeHtml(s.name)}
@@ -224,9 +261,15 @@ function switchTab(tabName) {
 async function loadLectures() {
   if (!currentSubjectId) return;
   try {
-    const res = await fetch(`/api/lectures?subject_id=${currentSubjectId}`, { headers: getUserHeaders() });
-    if (!res.ok) return;
-    const docs = await res.json();
+    let docs = await smartFetchJson(`/api/lectures?subject_id=${currentSubjectId}`, './data/lectures.json');
+    if (!docs) docs = [];
+    // 정적 파일인 경우 과목 필터링 및 unit_count 보정
+    docs = docs.filter(d => !d.subject_id || d.subject_id === currentSubjectId);
+    docs.forEach(d => {
+      if (d.unit_count === undefined && d.units) {
+        d.unit_count = d.units.length;
+      }
+    });
 
     document.getElementById('badgeLectureCount').textContent = docs.length;
     document.getElementById('lectureTotalCountText').textContent = `총 ${docs.length}개 문서`;
@@ -340,9 +383,15 @@ function closeUnitModal() {
 async function loadExams() {
   if (!currentSubjectId) return;
   try {
-    const res = await fetch(`/api/exams?subject_id=${currentSubjectId}`, { headers: getUserHeaders() });
-    if (!res.ok) return;
-    const exams = await res.json();
+    let exams = await smartFetchJson(`/api/exams?subject_id=${currentSubjectId}`, './data/exams.json');
+    if (!exams) exams = [];
+    // 정적 파일인 경우 과목 필터링 및 question_count 보정
+    exams = exams.filter(e => !e.subject_id || e.subject_id === currentSubjectId);
+    exams.forEach(e => {
+      if (e.question_count === undefined && e.questions) {
+        e.question_count = e.questions.length;
+      }
+    });
 
     document.getElementById('badgeExamCount').textContent = exams.length;
     document.getElementById('examTotalCountText').textContent = `총 ${exams.length}개 세트`;
@@ -515,11 +564,12 @@ async function runAnalysis() {
 async function loadRecentResult() {
   if (!currentSubjectId) return;
   try {
-    const res = await fetch(`/api/match/results?subject_id=${currentSubjectId}`, { headers: getUserHeaders() });
-    if (!res.ok) return;
-    const results = await res.json();
+    let results = await smartFetchJson(`/api/match/results?subject_id=${currentSubjectId}`, './data/results.json');
     if (results && results.length > 0) {
-      await loadResultDetail(results[0].id);
+      // 과목 필터링
+      const subResults = results.filter(r => !r.subject_id || r.subject_id === currentSubjectId);
+      const target = subResults.length > 0 ? subResults[0] : results[0];
+      await loadResultDetail(target.id || target);
     } else {
       document.getElementById('noResultsGuide').classList.remove('hidden');
       document.getElementById('resultsDashboard').classList.add('hidden');
@@ -529,18 +579,26 @@ async function loadRecentResult() {
   }
 }
 
-async function loadResultDetail(resultId) {
+async function loadResultDetail(resultIdOrObj) {
   try {
-    const res = await fetch(`/api/match/results/${resultId}`, { headers: getUserHeaders() });
-    if (!res.ok) return;
-    currentResults = await res.json();
+    let data = null;
+    if (typeof resultIdOrObj === 'object' && resultIdOrObj !== null) {
+      data = resultIdOrObj;
+    } else {
+      data = await smartFetchJson(`/api/match/results/${resultIdOrObj}`, './data/results.json');
+      if (Array.isArray(data)) {
+        data = data.find(r => r.id === resultIdOrObj) || data[0];
+      }
+    }
+    if (!data) return;
+    currentResults = data;
 
     document.getElementById('noResultsGuide').classList.add('hidden');
     document.getElementById('resultsDashboard').classList.remove('hidden');
 
     document.getElementById('currentExamTitleBadge').textContent = currentResults.exam_title || '분석 결과';
     document.getElementById('currentResultMeta').textContent = 
-      `분석 시각: ${currentResults.analyzed_at} | 분석자: ${currentResults.analyzed_by || '사용자'} | 참조 강의자료: ${currentResults.lecture_count}개`;
+      `분석 시각: ${currentResults.analyzed_at || '-'} | 분석자: ${currentResults.analyzed_by || '사용자'} | 참조 강의자료: ${currentResults.lecture_count || 0}개`;
 
     const summary = currentResults.summary || {};
     document.getElementById('statTotalChoices').textContent = summary.total_choices || 0;
@@ -831,13 +889,20 @@ let currentExamForAnswerKey = null;
 async function loadWorkbooks() {
   if (!currentSubjectId) return;
   try {
-    const [examsRes, histRes] = await Promise.all([
-      fetch(`/api/exams?subject_id=${currentSubjectId}`, { headers: getUserHeaders() }),
-      fetch(`/api/workbooks/history?subject_id=${currentSubjectId}`, { headers: getUserHeaders() })
-    ]);
+    let exams = await smartFetchJson(`/api/exams?subject_id=${currentSubjectId}`, './data/exams.json');
+    if (!exams) exams = [];
+    exams = exams.filter(e => !e.subject_id || e.subject_id === currentSubjectId);
+    exams.forEach(e => {
+      if (e.question_count === undefined && e.questions) {
+        e.question_count = e.questions.length;
+      }
+    });
 
-    const exams = examsRes.ok ? await examsRes.json() : [];
-    const history = histRes.ok ? await histRes.json() : [];
+    let history = [];
+    try {
+      const histRes = await fetch(`/api/workbooks/history?subject_id=${currentSubjectId}`, { headers: getUserHeaders() });
+      if (histRes.ok) history = await histRes.json();
+    } catch (e) {}
 
     // 1. 문제집 서재 그리드 렌더링
     const grid = document.getElementById('workbookGrid');
@@ -939,11 +1004,12 @@ async function loadWorkbooks() {
 
 async function startSolving(examId) {
   try {
-    const res = await fetch(`/api/exams/${examId}`, { headers: getUserHeaders() });
-    if (!res.ok) return;
-    const exam = await res.json();
+    let exam = await smartFetchJson(`/api/exams/${examId}`, './data/exams.json');
+    if (Array.isArray(exam)) {
+      exam = exam.find(e => e.id === examId) || exam[0];
+    }
 
-    if (!exam.questions || exam.questions.length === 0) {
+    if (!exam || !exam.questions || exam.questions.length === 0) {
       alert('이 문제집에는 등록된 문항이 없습니다.');
       return;
     }
@@ -1151,6 +1217,65 @@ function exitSolver() {
   }
 }
 
+// ------------------- 정답 비교 헬퍼 (복수 정답 & 단답형 완벽 지원) -------------------
+
+const CIRCLED_TO_NUM = {
+  '①': '1', '②': '2', '③': '3', '④': '4', '⑤': '5',
+  '⑥': '6', '⑦': '7', '⑧': '8', '⑨': '9', '⑩': '10',
+  '⑴': '1', '⑵': '2', '⑶': '3', '⑷': '4', '⑸': '5'
+};
+
+function normalizeTokens(str) {
+  if (!str) return [];
+  let s = String(str);
+  for (const [c, n] of Object.entries(CIRCLED_TO_NUM)) {
+    s = s.split(c).join(n);
+  }
+  return s.split(/[,/·\s]+/).map(t => t.trim().toLowerCase()).filter(Boolean);
+}
+
+function evaluateQuestionAnswer(userAns, correctKey) {
+  if (!correctKey || !correctKey.trim()) {
+    return { hasKey: false, isCorrect: false };
+  }
+  const uTrim = (userAns || '').trim();
+  const cTrim = correctKey.trim();
+  if (!uTrim) {
+    return { hasKey: true, isCorrect: false };
+  }
+
+  // 1. 단순 텍스트 일치 (공백/대소문자 무시 - 단답형 및 원문자 일치)
+  if (uTrim.toLowerCase() === cTrim.toLowerCase()) {
+    return { hasKey: true, isCorrect: true };
+  }
+
+  // 2. 복수 정답 및 번호 정규화 비교 (예: "3,4", "1, 4", "③, ④")
+  const uTokens = normalizeTokens(uTrim);
+  const cTokens = normalizeTokens(cTrim);
+
+  // 복수 정답 중 하나를 선택한 경우도 정답 처리
+  if (uTokens.length === 1 && cTokens.includes(uTokens[0])) {
+    return { hasKey: true, isCorrect: true };
+  }
+
+  // 복수 정답 전체를 다 맞춘 경우
+  if (uTokens.length > 1 && uTokens.slice().sort().join(',') === cTokens.slice().sort().join(',')) {
+    return { hasKey: true, isCorrect: true };
+  }
+
+  return { hasKey: true, isCorrect: false };
+}
+
+function formatDisplayChoice(choiceStr) {
+  if (!choiceStr) return '';
+  const NUM_TO_CIRC = { '1':'①', '2':'②', '3':'③', '4':'④', '5':'⑤' };
+  let res = choiceStr;
+  for (const [n, c] of Object.entries(NUM_TO_CIRC)) {
+    res = res.replace(new RegExp(`(?<!\\d)${n}(?!\\d)`, 'g'), c);
+  }
+  return res;
+}
+
 async function submitExam() {
   if (!currentExamForSolving) return;
   const qList = currentExamForSolving.questions || [];
@@ -1166,6 +1291,8 @@ async function submitExam() {
 
   stopSolverTimer();
 
+  // 1. 서버 API 호출 시도 (로컬 서버 환경일 때)
+  let scoredData = null;
   try {
     const res = await fetch(`/api/workbooks/${currentExamForSolving.id}/submit`, {
       method: 'POST',
@@ -1175,16 +1302,100 @@ async function submitExam() {
         time_spent_seconds: solverSeconds
       })
     });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      currentReviewData = data;
-      renderReviewResult(data);
-    } else {
-      alert('채점 처리 실패: ' + (data.detail || ''));
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success) {
+        scoredData = data;
+      }
     }
   } catch (err) {
-    alert('채점 중 오류가 발생했습니다.');
+    // 서버가 없는 GitHub Pages 환경이거나 통신 오류 시 클라이언트 사이드 채점으로 자동 전환
   }
+
+  // 2. 클라이언트 사이드 채점 fallback (GitHub Pages 완전 지원)
+  if (!scoredData) {
+    const answerKeys = currentExamForSolving.answer_keys || {};
+    let correctCount = 0;
+    let scoredQ = 0;
+    const reviews = [];
+
+    // 매칭 결과 캐시 참조
+    const matchingQList = (currentResults && currentResults.questions) ? currentResults.questions : [];
+
+    qList.forEach((q, idx) => {
+      const qNum = String(q.q_number || (idx + 1));
+      const uChoice = userAnswers[qNum] || '';
+      const cChoice = answerKeys[qNum] || '';
+
+      const evalRes = evaluateQuestionAnswer(uChoice, cChoice);
+      if (evalRes.hasKey) {
+        scoredQ++;
+        if (evalRes.isCorrect) {
+          correctCount++;
+        }
+      }
+
+      const matchedQ = matchingQList.find(mq => String(mq.q_number) === qNum);
+
+      reviews.push({
+        q_number: intOrStr(qNum),
+        stem: q.stem || '',
+        choices: q.choices || [],
+        user_choice: uChoice,
+        correct_choice: formatDisplayChoice(cChoice),
+        is_correct: evalRes.isCorrect,
+        has_answer_key: evalRes.hasKey,
+        matched_analysis: matchedQ ? (matchedQ.choices || []) : []
+      });
+    });
+
+    const finalScore = scoredQ > 0 ? Math.round((correctCount / scoredQ) * 1000) / 10 : 0;
+
+    scoredData = {
+      success: true,
+      score: finalScore,
+      correct_count: correctCount,
+      total_scored: scoredQ,
+      total_questions: total,
+      time_spent_seconds: solverSeconds,
+      reviews: reviews
+    };
+  }
+
+  // 3. Supabase DB에 풀이 기록 저장 (로그인된 경우)
+  if (currentUser && typeof supabaseClient !== 'undefined' && supabaseClient) {
+    try {
+      const entries = Object.entries(userAnswers).map(([qNum, ans]) => {
+        const correctKey = (currentExamForSolving.answer_keys || {})[qNum] || '';
+        const ev = evaluateQuestionAnswer(ans, correctKey);
+        return {
+          user_id: currentUser.id,
+          subject_id: currentSubjectId || 'default',
+          exam_id: currentExamForSolving.id,
+          q_num: parseInt(qNum, 10) || 0,
+          user_answer: ans,
+          is_correct: ev.isCorrect,
+          updated_at: new Date().toISOString()
+        };
+      });
+
+      if (entries.length > 0) {
+        await supabaseClient.from('user_answers').upsert(entries, {
+          onConflict: 'user_id,exam_id,q_num'
+        });
+      }
+    } catch (sbErr) {
+      console.warn('Supabase answer saving failed:', sbErr);
+    }
+  }
+
+  currentReviewData = scoredData;
+  renderReviewResult(scoredData);
+}
+
+function intOrStr(val) {
+  const n = parseInt(val, 10);
+  return isNaN(n) ? val : n;
 }
 
 // ------------------- 채점 결과 & 오답노트 뷰 -------------------
@@ -1291,40 +1502,68 @@ function backToWorkbooksList() {
   loadWorkbooks();
 }
 
-// ------------------- 정답표(Answer Key) 관리 모달 -------------------
+// ------------------- 정답표(Answer Key) 관리 모달 (복수 정답 & 주관식 완벽 지원) -------------------
 
 async function openAnswerKeyModal(examId) {
   try {
-    const res = await fetch(`/api/exams/${examId}`, { headers: getUserHeaders() });
-    if (!res.ok) return;
-    const exam = await res.json();
+    let exam = await smartFetchJson(`/api/exams/${examId}`, './data/exams.json');
+    if (Array.isArray(exam)) {
+      exam = exam.find(e => e.id === examId) || exam[0];
+    }
+    if (!exam) return;
     currentExamForAnswerKey = exam;
+
+    // 로컬 스토리지에 저장된 커스텀 정답표가 있다면 병합
+    const localSavedKeys = localStorage.getItem(`custom_answer_keys_${examId}`);
+    if (localSavedKeys) {
+      try {
+        exam.answer_keys = { ...(exam.answer_keys || {}), ...JSON.parse(localSavedKeys) };
+      } catch (e) {}
+    }
 
     document.getElementById('akModalTitle').textContent = `[${exam.title}] 정답표 설정`;
     const container = document.getElementById('akQuestionsList');
     const existingKeys = exam.answer_keys || {};
 
+    const standardChoices = ['①', '②', '③', '④', '⑤'];
+
     container.innerHTML = (exam.questions || []).map((q, idx) => {
       const qNum = String(q.q_number || (idx + 1));
       const currentKey = existingKeys[qNum] || '';
-
-      const standardChoices = ['①', '②', '③', '④', '⑤'];
+      const isSubjective = !q.choices || q.choices.length === 0;
 
       return `
         <div class="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-          <p class="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-            <span class="w-5 h-5 rounded-md bg-slate-800 text-white flex items-center justify-center text-[10px]">${qNum}</span>
-            <span>${escapeHtml(q.stem || '문항 ' + qNum)}</span>
-          </p>
-          <div class="flex items-center gap-2">
-            <span class="text-xs text-slate-500 font-semibold">정답:</span>
-            <div class="flex gap-1.5">
-              ${standardChoices.map(opt => `
-                <label class="px-2.5 py-1 text-xs rounded-lg border cursor-pointer transition ${currentKey === opt ? 'bg-indigo-600 text-white font-bold border-indigo-600' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'}">
-                  <input type="radio" name="ak_q_${qNum}" value="${opt}" ${currentKey === opt ? 'checked' : ''} class="hidden" onchange="updateAnswerKeyRadio('${qNum}', '${opt}')">
-                  ${opt}
-                </label>
-              `).join('')}
+          <div class="flex items-start justify-between gap-2">
+            <p class="text-xs font-bold text-slate-800 flex items-start gap-1.5 flex-1">
+              <span class="w-5 h-5 rounded-md bg-slate-800 text-white flex items-center justify-center text-[10px] shrink-0 mt-0.5">${qNum}</span>
+              <span class="leading-snug">${escapeHtml(q.stem || '문항 ' + qNum)}</span>
+            </p>
+            ${isSubjective 
+              ? '<span class="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">주관식/단답</span>' 
+              : '<span class="text-[10px] font-bold text-slate-500 bg-slate-200/70 px-2 py-0.5 rounded">객관식</span>'}
+          </div>
+          
+          <div class="flex flex-wrap items-center gap-2.5 pt-1">
+            <span class="text-xs text-slate-500 font-semibold">정답 설정:</span>
+            
+            ${!isSubjective ? `
+              <div class="flex gap-1">
+                ${standardChoices.map(opt => `
+                  <button type="button" onclick="quickSetAnswerKey('${qNum}', '${opt}')" 
+                          class="px-2 py-0.5 text-xs rounded-lg border transition ${currentKey === opt ? 'bg-indigo-600 text-white font-bold border-indigo-600' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'}">
+                    ${opt}
+                  </button>
+                `).join('')}
+              </div>
+            ` : ''}
+
+            <!-- 복수 정답 및 주관식 텍스트 직접 입력창 -->
+            <div class="flex-1 min-w-[200px]">
+              <input type="text" id="ak_input_${qNum}" value="${escapeHtml(currentKey)}" 
+                     oninput="updateAnswerKeyText('${qNum}', this.value)"
+                     placeholder="${isSubjective ? '주관식 정답 입력 (예: 단어, 서술)' : '복수 정답/직접 입력 (예: 3,4 또는 ③,④)'}" 
+                     class="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none bg-white font-medium">
             </div>
           </div>
         </div>
@@ -1337,10 +1576,29 @@ async function openAnswerKeyModal(examId) {
   }
 }
 
-function updateAnswerKeyRadio(qNum, opt) {
+function quickSetAnswerKey(qNum, opt) {
   if (!currentExamForAnswerKey) return;
   if (!currentExamForAnswerKey.answer_keys) currentExamForAnswerKey.answer_keys = {};
-  currentExamForAnswerKey.answer_keys[qNum] = opt;
+  
+  const input = document.getElementById(`ak_input_${qNum}`);
+  let cur = (currentExamForAnswerKey.answer_keys[qNum] || '').trim();
+  
+  if (cur === opt) {
+    cur = '';
+  } else {
+    cur = opt;
+  }
+  
+  currentExamForAnswerKey.answer_keys[qNum] = cur;
+  if (input) input.value = cur;
+  
+  openAnswerKeyModal(currentExamForAnswerKey.id);
+}
+
+function updateAnswerKeyText(qNum, val) {
+  if (!currentExamForAnswerKey) return;
+  if (!currentExamForAnswerKey.answer_keys) currentExamForAnswerKey.answer_keys = {};
+  currentExamForAnswerKey.answer_keys[qNum] = val.trim();
 }
 
 function closeAnswerKeyModal() {
@@ -1352,22 +1610,19 @@ async function saveAnswerKeyForm() {
   const examId = currentExamForAnswerKey.id;
   const keys = currentExamForAnswerKey.answer_keys || {};
 
+  // 로컬 캐시 즉시 업데이트
+  localStorage.setItem(`custom_answer_keys_${examId}`, JSON.stringify(keys));
+
+  // 서버 API가 있을 경우 동기화
   try {
-    const res = await fetch(`/api/workbooks/${examId}/answers`, {
+    await fetch(`/api/workbooks/${examId}/answers`, {
       method: 'POST',
       headers: { ...getUserHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ answer_keys: keys })
     });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      alert('정답표가 성공적으로 저장되었습니다.');
-      closeAnswerKeyModal();
-      loadWorkbooks();
-    } else {
-      alert('저장 실패: ' + (data.detail || ''));
-    }
-  } catch (err) {
-    alert('서버 오류');
-  }
-}
+  } catch (err) {}
 
+  alert('정답표가 성공적으로 저장되었습니다!');
+  closeAnswerKeyModal();
+  loadWorkbooks();
+}
