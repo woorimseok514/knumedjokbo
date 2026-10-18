@@ -1708,8 +1708,6 @@ function backToWorkbooksList() {
 
 // ------------------- 정답표(Answer Key) 관리 모달 (선지 개수 맞춤 동적 세팅) -------------------
 
-let currentExamForAnswerKey = null;
-
 async function openAnswerKeyModal(examId) {
   try {
     let exam = await smartFetchJson(`/api/exams/${examId}`, './data/exams.json');
