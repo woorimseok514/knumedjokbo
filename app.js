@@ -34,7 +34,8 @@ async function checkUserAuth() {
           currentUser = u;
           document.getElementById('userNameDisplay').textContent = `${currentUser.name} (${currentUser.username})`;
           showLoginModal(false);
-          syncExamOverridesFromCloud().catch(e => console.warn(e));\n          loadSubjects().catch(e => console.warn(e));
+          syncExamOverridesFromCloud().catch(e => console.warn(e));
+          loadSubjects().catch(e => console.warn(e));
           return;
         }
       } catch (e) {}
@@ -290,7 +291,7 @@ async function loadSubjects() {
     let subs = await smartFetchJson('/api/subjects', './data/subjects.json');
     if (!subs || subs.length === 0) {
       // 기본 과목 fallback
-      subs = [{ id: "sub_cell_mol_2026", name: "의학세포분자생물학 (기출 문제은행)", description: "2022~2025학년도 족보 및 강의자료" }];
+      subs = [{ id: "sub_fbdc79d0", name: "의학세포분자생물학 (기출 문제은행)", description: "2022~2025학년도 족보 및 강의자료" }];
     }
 
     const sel = document.getElementById('activeSubjectSelect');
@@ -360,7 +361,7 @@ async function loadLectures() {
   if (!currentSubjectId) return;
   try {
     let staticDocs = await smartFetchJson(`/api/lectures?subject_id=${currentSubjectId}`, './data/lectures.json') || [];
-    staticDocs = staticDocs.filter(d => !d.subject_id || d.subject_id === currentSubjectId);
+    staticDocs = staticDocs.filter(d => !d.subject_id || d.subject_id === currentSubjectId || d.subject_id === "sub_fbdc79d0");
 
     // Supabase shared_lectures에서 다른 이용자가 등록한 강의자료 실시간 조회
     let cloudDocs = [];
@@ -534,7 +535,7 @@ async function loadExams() {
   try {
     let staticExams = await smartFetchJson(`/api/exams?subject_id=${currentSubjectId}`, './data/exams.json');
     if (!staticExams) staticExams = [];
-    staticExams = staticExams.filter(e => !e.subject_id || e.subject_id === currentSubjectId);
+    staticExams = staticExams.filter(e => !e.subject_id || e.subject_id === currentSubjectId || e.subject_id === "sub_fbdc79d0");
 
     // 1. Supabase shared_exams에서 다른 이용자가 등록한 최신 족보 실시간 조회
     let cloudExams = [];
@@ -1289,7 +1290,7 @@ async function loadWorkbooks() {
   if (!currentSubjectId) return;
   try {
     let staticExams = await smartFetchJson(`/api/exams?subject_id=${currentSubjectId}`, './data/exams.json') || [];
-    staticExams = staticExams.filter(e => !e.subject_id || e.subject_id === currentSubjectId);
+    staticExams = staticExams.filter(e => !e.subject_id || e.subject_id === currentSubjectId || e.subject_id === "sub_fbdc79d0");
 
     // Supabase shared_exams 병합
     let cloudExams = [];
